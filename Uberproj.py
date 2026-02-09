@@ -58,11 +58,12 @@ def carregar_config_nuvem():
                 try: config_dict[chave] = float(valor)
                 except: config_dict[chave] = valor
         
+        # Padrões atualizados (AGORA COM DIAS_TRABALHO_MES)
         padrao = {
-            "valor_carro": 83000.0, "custo_fixo_anual": 6300.0, "dias_trabalho_semana": 5.0,
+            "valor_carro": 83000.0, "custo_fixo_anual": 6300.0, 
+            "dias_trabalho_mes": 4.0, # Padrão ajustado para seu exemplo (4 dias/mês)
             "custo_manut_km": 0.25, "custo_deprec_km": 0.40, "media_km_dia": 150.0,
             "consumo_carro": 10.0, "preco_gasolina": 5.80,
-            # Campos novos para FIPE Automática
             "fipe_marca_id": "", "fipe_modelo_id": "", "fipe_ano_id": "", "fipe_nome_carro": ""
         }
         
@@ -72,7 +73,7 @@ def carregar_config_nuvem():
         return config_final
     except:
         return {
-            "valor_carro": 83000.0, "custo_fixo_anual": 6300.0, "dias_trabalho_semana": 5.0,
+            "valor_carro": 83000.0, "custo_fixo_anual": 6300.0, "dias_trabalho_mes": 4.0,
             "custo_manut_km": 0.25, "custo_deprec_km": 0.40, "media_km_dia": 150.0,
             "consumo_carro": 10.0, "preco_gasolina": 5.80,
             "fipe_marca_id": "", "fipe_modelo_id": "", "fipe_ano_id": "", "fipe_nome_carro": ""
@@ -171,7 +172,6 @@ def get_json(url):
     except: pass
     return None
 
-# --- ESTILO GRÁFICO ---
 def estilo_grafico(fig, titulo_eixo_y):
     fig.update_traces(
         texttemplate='R$ %{y:,.2f}', 
@@ -197,9 +197,8 @@ menu_escolha = st.sidebar.radio("Ir para:", ["📝 Lançamento Diário", "📋 E
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Custos & Calculadora")
 
-# --- BLOCO FIPE INTELIGENTE ---
+# --- FIPE ---
 with st.sidebar.expander("🚘 Meu Carro (FIPE)", expanded=True):
-    # 1. Se já tem carro salvo, mostra botão de atualizar direto
     if config.get('fipe_marca_id') and config.get('fipe_modelo_id'):
         st.success(f"Carro Salvo: **{config.get('fipe_nome_carro')}**")
         if st.button("🔄 Atualizar Preço FIPE Agora"):
@@ -209,7 +208,6 @@ with st.sidebar.expander("🚘 Meu Carro (FIPE)", expanded=True):
                 if dados_fipe:
                     valor_str = dados_fipe['Valor']
                     novo_valor = float(valor_str.replace("R$ ", "").replace(".", "").replace(",", "."))
-                    # Atualiza sessão para salvar depois
                     config['valor_carro'] = novo_valor
                     st.session_state['config_user']['valor_carro'] = novo_valor
                     st.success(f"Atualizado: {valor_str}")
@@ -219,7 +217,6 @@ with st.sidebar.expander("🚘 Meu Carro (FIPE)", expanded=True):
     else:
         st.info("Selecione seu carro abaixo para salvar.")
 
-    # 2. Seletor para mudar de carro ou definir o primeiro
     st.markdown("---")
     st.markdown("**Definir/Trocar Carro:**")
     marcas_data = get_json("https://parallelum.com.br/fipe/api/v1/carros/marcas")
@@ -248,20 +245,19 @@ with st.sidebar.expander("🚘 Meu Carro (FIPE)", expanded=True):
                             if valor_final:
                                 valor_str = valor_final['Valor']
                                 valor_limpo = float(valor_str.replace("R$ ", "").replace(".", "").replace(",", "."))
-                                
-                                # Salva TUDO na memória para ser enviado ao Google
                                 st.session_state['config_user']['valor_carro'] = valor_limpo
                                 st.session_state['config_user']['fipe_marca_id'] = cod_marca
                                 st.session_state['config_user']['fipe_modelo_id'] = cod_modelo
                                 st.session_state['config_user']['fipe_ano_id'] = cod_ano
                                 st.session_state['config_user']['fipe_nome_carro'] = f"{marca_nome} {modelo_nome} {ano_nome}"
-                                
-                                st.success(f"Carro salvo! Valor: {valor_str}. Clique em 'Salvar Parâmetros' abaixo para gravar na nuvem.")
+                                st.success(f"Carro salvo! Valor: {valor_str}. Salve abaixo.")
 
-# Inputs de Configuração
+# --- INPUTS (COM MÉTODO 2) ---
 val_carro = st.sidebar.number_input("Valor Veículo (R$)", value=float(config.get('valor_carro', 83000)), format="%.2f")
 val_fixo = st.sidebar.number_input("IPVA+Seguro Anual (R$)", value=float(config.get('custo_fixo_anual', 6300)), format="%.2f")
-dias_semana = st.sidebar.slider("Dias trab/semana", 1, 7, value=int(config.get('dias_trabalho_semana', 5)))
+
+# MÉTODO 2: INPUT DE DIAS POR MÊS
+dias_mes = st.sidebar.number_input("Dias trabalhados por MÊS", min_value=1, max_value=31, value=int(config.get('dias_trabalho_mes', 4)), help="Ex: Se roda fim de semana sim/não, coloque 4 dias.")
 
 with st.sidebar.expander("⛽ Combustível e Rodagem", expanded=True):
     media_km_dia = st.number_input("Média KM por dia", value=float(config.get('media_km_dia', 150)), help="Usado para dividir o custo fixo por KM")
@@ -272,9 +268,11 @@ with st.sidebar.expander("🛠️ Manutenção/Depreciação", expanded=False):
     val_manut = st.number_input("Manut/KM (R$)", value=float(config.get('custo_manut_km', 0.25)), format="%.2f", step=0.05)
     val_deprec = st.number_input("Deprec/KM (R$)", value=float(config.get('custo_deprec_km', 0.40)), format="%.2f", step=0.05)
 
-# Cálculos de Aceite
-dias_trabalhados_ano = dias_semana * 52
-custo_fixo_dia = val_fixo / dias_trabalhados_ano
+# --- CÁLCULO MÉTODO 2 (CAIXA) ---
+custo_fixo_mensal = val_fixo / 12
+custo_fixo_dia = custo_fixo_mensal / dias_mes if dias_mes > 0 else 0
+
+# Para Stop Loss, diluímos pelo KM médio do dia
 custo_fixo_km = custo_fixo_dia / media_km_dia if media_km_dia > 0 else 0
 custo_gas_km = preco_gasolina / consumo_carro if consumo_carro > 0 else 0
 custo_km_total = custo_fixo_km + custo_gas_km + val_manut + val_deprec
@@ -282,15 +280,15 @@ custo_km_total = custo_fixo_km + custo_gas_km + val_manut + val_deprec
 st.sidebar.markdown("---")
 st.sidebar.markdown("### ⛔ STOP LOSS (Mínimo)")
 st.sidebar.metric("Aceitar acima de:", f"R$ {custo_km_total:.2f} / km")
+st.sidebar.caption(f"Meta IPVA/Seguro Diária: **R$ {custo_fixo_dia:.2f}** (Baseado em {dias_mes} dias/mês)")
 
 if st.sidebar.button("💾 Salvar Parâmetros (Nuvem)"):
-    # Atualiza o dicionário com os inputs da tela, mas mantém os IDs da FIPE que já estavam na memória
     config_atual = st.session_state['config_user']
     nova_config = {
-        "valor_carro": val_carro, "custo_fixo_anual": val_fixo, "dias_trabalho_semana": dias_semana,
+        "valor_carro": val_carro, "custo_fixo_anual": val_fixo, 
+        "dias_trabalho_mes": dias_mes, # Salva o novo campo
         "custo_manut_km": val_manut, "custo_deprec_km": val_deprec,
         "media_km_dia": media_km_dia, "consumo_carro": consumo_carro, "preco_gasolina": preco_gasolina,
-        # Mantém dados FIPE se existirem
         "fipe_marca_id": config_atual.get("fipe_marca_id", ""),
         "fipe_modelo_id": config_atual.get("fipe_modelo_id", ""),
         "fipe_ano_id": config_atual.get("fipe_ano_id", ""),
@@ -298,7 +296,7 @@ if st.sidebar.button("💾 Salvar Parâmetros (Nuvem)"):
     }
     with st.spinner("Salvando..."):
         if salvar_config_nuvem(nova_config):
-            st.sidebar.success("Configuração e Carro Salvos!")
+            st.sidebar.success("Salvo!")
             st.rerun()
 
 # --- TELA 1: LANÇAMENTO ---
@@ -314,7 +312,10 @@ if menu_escolha == "📝 Lançamento Diário":
 
     hoje_manutencao = hoje_km * val_manut
     hoje_depreciacao = hoje_km * val_deprec
+    
+    # MÉTODO 2: IPVA é fixo por dia trabalhado (Calculado acima)
     hoje_ipva = custo_fixo_dia 
+    
     hoje_total_guardar = hoje_manutencao + hoje_depreciacao + hoje_ipva
     hoje_lucro = (hoje_ganho + hoje_bonus) - hoje_total_guardar - hoje_comb
 
@@ -394,8 +395,12 @@ else:
 
         resumo = df.groupby('Chave').agg({'Ganhos': 'sum', 'Bonus': 'sum', 'Gastos_Combustivel': 'sum', 'Km_Rodado': 'sum', 'Data': 'nunique'}).rename(columns={'Data': 'Dias'}).reset_index().sort_values('Chave', ascending=False)
         
+        # CÁLCULOS FINAIS RELATÓRIO
         resumo['Receita_Total'] = resumo['Ganhos'] + resumo['Bonus']
+        
+        # MÉTODO 2: IPVA = Dias trabalhados * Custo Dia (Calculado na config)
         resumo['IPVA_Seguro_Guardado'] = resumo['Dias'] * custo_fixo_dia
+        
         resumo['Manutencao_Guardada'] = resumo['Km_Rodado'] * val_manut
         resumo['Depreciacao_Guardada'] = resumo['Km_Rodado'] * val_deprec
         resumo['Lucro_Liquido'] = resumo['Receita_Total'] - resumo['Gastos_Combustivel'] - resumo['IPVA_Seguro_Guardado'] - resumo['Manutencao_Guardada'] - resumo['Depreciacao_Guardada']
