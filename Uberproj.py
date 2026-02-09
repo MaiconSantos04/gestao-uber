@@ -58,10 +58,8 @@ def carregar_config_nuvem():
                 try: config_dict[chave] = float(valor)
                 except: config_dict[chave] = valor
         
-        # Padrões atualizados (AGORA COM DIAS_TRABALHO_MES)
         padrao = {
-            "valor_carro": 83000.0, "custo_fixo_anual": 6300.0, 
-            "dias_trabalho_mes": 4.0, # Padrão ajustado para seu exemplo (4 dias/mês)
+            "valor_carro": 83000.0, "custo_fixo_anual": 6300.0, "dias_trabalho_mes": 4.0,
             "custo_manut_km": 0.25, "custo_deprec_km": 0.40, "media_km_dia": 150.0,
             "consumo_carro": 10.0, "preco_gasolina": 5.80,
             "fipe_marca_id": "", "fipe_modelo_id": "", "fipe_ano_id": "", "fipe_nome_carro": ""
@@ -197,23 +195,32 @@ menu_escolha = st.sidebar.radio("Ir para:", ["📝 Lançamento Diário", "📋 E
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Custos & Calculadora")
 
-# --- FIPE ---
+# --- FIPE COM CORREÇÃO ---
 with st.sidebar.expander("🚘 Meu Carro (FIPE)", expanded=True):
     if config.get('fipe_marca_id') and config.get('fipe_modelo_id'):
         st.success(f"Carro Salvo: **{config.get('fipe_nome_carro')}**")
         if st.button("🔄 Atualizar Preço FIPE Agora"):
             with st.spinner("Buscando valor atualizado na FIPE..."):
-                url = f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{config['fipe_marca_id']}/modelos/{config['fipe_modelo_id']}/anos/{config['fipe_ano_id']}"
+                # LIMPEZA CRÍTICA: Remove '.0' se o Google Sheets tiver adicionado
+                m_id = str(config['fipe_marca_id']).replace('.0', '').strip()
+                mod_id = str(config['fipe_modelo_id']).replace('.0', '').strip()
+                a_id = str(config['fipe_ano_id']).replace('.0', '').strip()
+                
+                url = f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{m_id}/modelos/{mod_id}/anos/{a_id}"
                 dados_fipe = get_json(url)
+                
                 if dados_fipe:
                     valor_str = dados_fipe['Valor']
                     novo_valor = float(valor_str.replace("R$ ", "").replace(".", "").replace(",", "."))
                     config['valor_carro'] = novo_valor
                     st.session_state['config_user']['valor_carro'] = novo_valor
-                    st.success(f"Atualizado: {valor_str}")
+                    
+                    # Salva o novo preço na nuvem automaticamente para não perder
+                    salvar_config_nuvem(st.session_state['config_user'])
+                    st.success(f"Sucesso! Novo valor: {valor_str}")
                     st.rerun()
                 else:
-                    st.error("Erro ao conectar na FIPE.")
+                    st.error("Erro ao conectar na FIPE. Verifique se o código do carro mudou.")
     else:
         st.info("Selecione seu carro abaixo para salvar.")
 
@@ -257,7 +264,7 @@ val_carro = st.sidebar.number_input("Valor Veículo (R$)", value=float(config.ge
 val_fixo = st.sidebar.number_input("IPVA+Seguro Anual (R$)", value=float(config.get('custo_fixo_anual', 6300)), format="%.2f")
 
 # MÉTODO 2: INPUT DE DIAS POR MÊS
-dias_mes = st.sidebar.number_input("Dias trabalhados por MÊS", min_value=1, max_value=31, value=int(config.get('dias_trabalho_mes', 4)), help="Ex: Se roda fim de semana sim/não, coloque 4 dias.")
+dias_mes = st.sidebar.number_input("Dias trabalhados por MÊS", min_value=1, max_value=31, value=int(float(config.get('dias_trabalho_mes', 4))), help="Ex: Se roda fim de semana sim/não, coloque 4 dias.")
 
 with st.sidebar.expander("⛽ Combustível e Rodagem", expanded=True):
     media_km_dia = st.number_input("Média KM por dia", value=float(config.get('media_km_dia', 150)), help="Usado para dividir o custo fixo por KM")
