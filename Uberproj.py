@@ -42,7 +42,7 @@ def conectar_gsheets(nome_aba="Dados"):
         st.error("⚠️ Planilha 'GestaoUberDB' não encontrada.")
         st.stop()
 
-# --- GERENCIAMENTO DE CONFIGURAÇÃO (NA NUVEM) ---
+# --- CONFIGURAÇÃO (NUVEM) ---
 def carregar_config_nuvem():
     if 'config_user' in st.session_state and st.session_state.get('config_carregada', False):
         return st.session_state['config_user']
@@ -58,28 +58,21 @@ def carregar_config_nuvem():
                 try: config_dict[chave] = float(valor)
                 except: config_dict[chave] = valor
         
-        # Padrões atualizados com campos de combustível e média KM
         padrao = {
-            "valor_carro": 83000.0,
-            "custo_fixo_anual": 6300.0,
-            "dias_trabalho_semana": 5.0,
-            "custo_manut_km": 0.25,
-            "custo_deprec_km": 0.40,
-            "media_km_dia": 150.0,      # Novo
-            "consumo_carro": 10.0,      # Novo
-            "preco_gasolina": 5.80      # Novo
+            "valor_carro": 83000.0, "custo_fixo_anual": 6300.0, "dias_trabalho_semana": 5.0,
+            "custo_manut_km": 0.25, "custo_deprec_km": 0.40, "media_km_dia": 150.0,
+            "consumo_carro": 10.0, "preco_gasolina": 5.80
         }
         
         config_final = {**padrao, **config_dict}
         st.session_state['config_user'] = config_final
         st.session_state['config_carregada'] = True
         return config_final
-        
     except:
         return {
-            "valor_carro": 83000.0, "custo_fixo_anual": 6300.0,
-            "dias_trabalho_semana": 5.0, "custo_manut_km": 0.25, "custo_deprec_km": 0.40,
-            "media_km_dia": 150.0, "consumo_carro": 10.0, "preco_gasolina": 5.80
+            "valor_carro": 83000.0, "custo_fixo_anual": 6300.0, "dias_trabalho_semana": 5.0,
+            "custo_manut_km": 0.25, "custo_deprec_km": 0.40, "media_km_dia": 150.0,
+            "consumo_carro": 10.0, "preco_gasolina": 5.80
         }
 
 def salvar_config_nuvem(nova_config):
@@ -175,8 +168,15 @@ def get_json(url):
     except: pass
     return None
 
+# --- ESTILO GRÁFICO (COM TOOLTIP CORRIGIDO) ---
 def estilo_grafico(fig, titulo_eixo_y):
-    fig.update_traces(texttemplate='R$ %{y:,.2f}', textposition='outside', marker_cornerradius=10)
+    fig.update_traces(
+        texttemplate='R$ %{y:,.2f}', 
+        textposition='outside', 
+        marker_cornerradius=10,
+        # AQUI ESTÁ A CORREÇÃO: Mostra "Nome: R$ Valor" limpinho
+        hovertemplate='<b>%{data.name}</b>: R$ %{y:,.2f}<extra></extra>'
+    )
     fig.update_layout(title_x=0.5, title_font_size=18, yaxis_title=titulo_eixo_y, xaxis_title=None,
         xaxis=dict(type='category', showgrid=False, showline=False),
         yaxis=dict(showgrid=True, gridcolor='#444444', zerolinecolor='#444444', showline=False),
@@ -185,7 +185,7 @@ def estilo_grafico(fig, titulo_eixo_y):
 
 MESES_PT = {'Jan': 'Jan', 'Feb': 'Fev', 'Mar': 'Mar', 'Apr': 'Abr', 'May': 'Mai', 'Jun': 'Jun', 'Jul': 'Jul', 'Aug': 'Ago', 'Sep': 'Set', 'Oct': 'Out', 'Nov': 'Nov', 'Dec': 'Dez'}
 
-# --- INICIALIZAÇÃO DE CONFIGURAÇÃO ---
+# --- INICIALIZAÇÃO ---
 config = carregar_config_nuvem()
 
 # --- BARRA LATERAL ---
@@ -197,10 +197,6 @@ st.sidebar.header("⚙️ Custos & Calculadora")
 
 # Inputs de Configuração
 with st.sidebar.expander("📝 Parâmetros do Carro", expanded=False):
-    # FIPE
-    if st.button("🔄 Atualizar FIPE Agora"):
-        pass # Placeholder visual, lógica está complexa para colocar aqui dentro enxuto
-        
     val_carro = st.number_input("Valor Veículo (R$)", value=float(config.get('valor_carro', 83000)), format="%.2f")
     val_fixo = st.number_input("IPVA+Seguro Anual (R$)", value=float(config.get('custo_fixo_anual', 6300)), format="%.2f")
     dias_semana = st.slider("Dias trab/semana", 1, 7, value=int(config.get('dias_trabalho_semana', 5)))
@@ -214,21 +210,16 @@ with st.sidebar.expander("🛠️ Manutenção/Depreciação", expanded=False):
     val_manut = st.number_input("Manut/KM (R$)", value=float(config.get('custo_manut_km', 0.25)), format="%.2f", step=0.05)
     val_deprec = st.number_input("Deprec/KM (R$)", value=float(config.get('custo_deprec_km', 0.40)), format="%.2f", step=0.05)
 
-# --- CÁLCULO DO PREÇO DE ACEITE ---
+# Cálculos de Aceite
 dias_trabalhados_ano = dias_semana * 52
 custo_fixo_dia = val_fixo / dias_trabalhados_ano
-
-# Custo Fixo por KM (Diluição)
 custo_fixo_km = custo_fixo_dia / media_km_dia if media_km_dia > 0 else 0
-# Custo Combustivel por KM
 custo_gas_km = preco_gasolina / consumo_carro if consumo_carro > 0 else 0
-# Total
 custo_km_total = custo_fixo_km + custo_gas_km + val_manut + val_deprec
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### ⛔ STOP LOSS (Mínimo)")
 st.sidebar.metric("Aceitar acima de:", f"R$ {custo_km_total:.2f} / km")
-st.sidebar.caption(f"Inclui: Gasolina ({custo_gas_km:.2f}) + Manut ({val_manut}) + Deprec ({val_deprec}) + IPVA Diluído ({custo_fixo_km:.2f})")
 
 if st.sidebar.button("💾 Salvar Parâmetros"):
     nova_config = {
@@ -252,26 +243,22 @@ if menu_escolha == "📝 Lançamento Diário":
     hoje_comb = c4.number_input("Combustível (R$)", value=0.0, step=5.0, format="%.2f")
     obs = st.text_input("Observação")
 
-    # Cálculos Reais do Dia
     hoje_manutencao = hoje_km * val_manut
     hoje_depreciacao = hoje_km * val_deprec
-    hoje_ipva = custo_fixo_dia # IPVA cobrado cheio no dia de trabalho
-    
+    hoje_ipva = custo_fixo_dia 
     hoje_total_guardar = hoje_manutencao + hoje_depreciacao + hoje_ipva
     hoje_lucro = (hoje_ganho + hoje_bonus) - hoje_total_guardar - hoje_comb
 
-    # KPI Cards
     st.markdown("---")
     kpi1, kpi2, kpi3 = st.columns(3)
     kpi1.error(f"🚨 GUARDAR HOJE: R$ {hoje_total_guardar:.2f}")
     if hoje_lucro > 0: kpi2.success(f"💵 LUCRO LÍQUIDO: R$ {hoje_lucro:.2f}")
     else: kpi2.error(f"💸 PREJUÍZO: R$ {hoje_lucro:.2f}")
     
-    # Mostra rentabilidade do dia
     valor_km_hoje = (hoje_ganho + hoje_bonus) / hoje_km if hoje_km > 0 else 0
     kpi3.metric("Sua Média Hoje", f"R$ {valor_km_hoje:.2f} / km", delta=f"{valor_km_hoje - custo_km_total:.2f} sobre o mínimo")
 
-    labels = ['Lucro', 'Guardar (IPVA+Manut+Deprec)', 'Combustível']
+    labels = ['Lucro', 'Guardar', 'Combustível']
     values = [max(0, hoje_lucro), hoje_total_guardar, hoje_comb]
     fig = go.Figure(data=[go.Pie(labels=labels, values=values, hole=.5, textinfo='percent', textposition='inside', marker=dict(colors=['#28a745', '#dc3545', '#ffc107'], line=dict(color='#000000', width=1)))])
     fig.update_layout(height=350, margin=dict(t=30, b=10, l=10, r=10), legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
@@ -279,7 +266,6 @@ if menu_escolha == "📝 Lançamento Diário":
 
     st.markdown("---")
     col_save, col_undo = st.columns([3, 1])
-    
     if col_save.button("💾 Salvar no Google Sheets", type="primary", use_container_width=True):
         if (hoje_ganho > 0 or hoje_bonus > 0):
             if hoje_comb > 800 or hoje_km > 2000:
@@ -291,7 +277,6 @@ if menu_escolha == "📝 Lançamento Diário":
                         st.success("Salvo com sucesso!")
                         st.cache_data.clear()
         else: st.warning("Preencha algum valor.")
-            
     if col_undo.button("↩️ Desfazer Último", use_container_width=True):
         with st.spinner("Apagando..."):
             if desfazer_ultimo_lancamento():
@@ -340,7 +325,6 @@ else:
 
         resumo = df.groupby('Chave').agg({'Ganhos': 'sum', 'Bonus': 'sum', 'Gastos_Combustivel': 'sum', 'Km_Rodado': 'sum', 'Data': 'nunique'}).rename(columns={'Data': 'Dias'}).reset_index().sort_values('Chave', ascending=False)
         
-        # CÁLCULOS FINAIS
         resumo['Receita_Total'] = resumo['Ganhos'] + resumo['Bonus']
         resumo['IPVA_Seguro_Guardado'] = resumo['Dias'] * custo_fixo_dia
         resumo['Manutencao_Guardada'] = resumo['Km_Rodado'] * val_manut
@@ -360,11 +344,21 @@ else:
             "Lucro_Liquido": st.column_config.NumberColumn("💵 Lucro", format="R$ %.2f")
         })
 
+        # --- AQUI: Renomeando colunas para o gráfico ficar com nomes bonitos no mouse ---
+        grafico_df = resumo.rename(columns={
+            'Ganhos': 'Corridas',
+            'Bonus': 'Bônus',
+            'Lucro_Liquido': 'Lucro Real',
+            'IPVA_Seguro_Guardado': 'IPVA/Seguro',
+            'Manutencao_Guardada': 'Manutenção',
+            'Depreciacao_Guardada': 'Depreciação'
+        })
+
         t1, t2, t3 = st.tabs(["Faturamento vs Bônus", "Lucro", "Custos"])
         with t1: 
-            fig_fat = px.bar(resumo, x='Chave', y=['Ganhos', 'Bonus'], title="Composição da Receita", barmode='stack', color_discrete_map={'Ganhos': '#00CC96', 'Bonus': '#636EFA'})
+            fig_fat = px.bar(grafico_df, x='Chave', y=['Corridas', 'Bônus'], title="Composição da Receita", barmode='stack', color_discrete_map={'Corridas': '#00CC96', 'Bônus': '#636EFA'})
             st.plotly_chart(estilo_grafico(fig_fat, "R$"), width="stretch")
-        with t2: st.plotly_chart(estilo_grafico(px.bar(resumo, x='Chave', y='Lucro_Liquido', color_discrete_sequence=['#28a745']), "R$"), width="stretch")
-        with t3: st.plotly_chart(estilo_grafico(px.bar(resumo, x='Chave', y=['IPVA_Seguro_Guardado', 'Manutencao_Guardada', 'Depreciacao_Guardada'], barmode='group'), "R$"), width="stretch")
+        with t2: st.plotly_chart(estilo_grafico(px.bar(grafico_df, x='Chave', y='Lucro Real', color_discrete_sequence=['#28a745']), "R$"), width="stretch")
+        with t3: st.plotly_chart(estilo_grafico(px.bar(grafico_df, x='Chave', y=['IPVA/Seguro', 'Manutenção', 'Depreciação'], barmode='group'), "R$"), width="stretch")
     else:
         st.info("Nenhum dado na planilha.")
