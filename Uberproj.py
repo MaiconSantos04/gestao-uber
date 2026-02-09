@@ -32,22 +32,13 @@ def conectar_gsheets():
         st.error("⚠️ Planilha 'GestaoUberDB' não encontrada.")
         st.stop()
 
-# --- FUNÇÃO DE LIMPEZA INTELIGENTE (CORRIGIDA) ---
+# --- LIMPEZA DE DADOS ---
 def limpar_valor_brasileiro(valor):
     if isinstance(valor, (int, float)):
         return float(valor)
-    
     valor_str = str(valor).strip().replace('R$', '').replace(' ', '')
-    
-    # Lógica Híbrida Inteligente:
-    # 1. Se tem vírgula, assumimos formato BR (1.000,00 ou 69,14)
     if ',' in valor_str:
-        valor_str = valor_str.replace('.', '') # Tira ponto de milhar
-        valor_str = valor_str.replace(',', '.') # Troca vírgula por ponto decimal
-    
-    # 2. Se NÃO tem vírgula, mas tem ponto, assumimos formato Python (69.14)
-    # O código anterior apagava esse ponto, gerando o erro. Agora mantemos.
-    
+        valor_str = valor_str.replace('.', '').replace(',', '.')
     try:
         return float(valor_str)
     except:
@@ -65,7 +56,7 @@ def carregar_dados():
         
         if 'Bonus' not in df.columns: df['Bonus'] = 0.0
 
-        # Cria ID baseado no índice + 2 (conta cabeçalho do Excel)
+        # Cria ID visual (Linha do Excel)
         df['ID'] = df.index + 2 
 
         df['Data'] = pd.to_datetime(df['Data']).dt.date
@@ -145,12 +136,11 @@ config = carregar_config()
 
 # --- BARRA LATERAL ---
 st.sidebar.title("Navegação")
-menu_escolha = st.sidebar.radio("Ir para:", ["📝 Lançamento Diário", "📋 Extrato Completo (Novo)", "📅 Relatório Semanal", "📅 Relatório Mensal", "📅 Relatório Anual"])
+menu_escolha = st.sidebar.radio("Ir para:", ["📝 Lançamento Diário", "📋 Extrato Completo", "📅 Relatório Semanal", "📅 Relatório Mensal", "📅 Relatório Anual"])
 
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Configurações")
 
-# FIPE
 with st.sidebar.expander("🔍 Atualizar Valor FIPE"):
     marcas_data = get_json("https://parallelum.com.br/fipe/api/v1/carros/marcas")
     if marcas_data:
@@ -194,11 +184,9 @@ st.sidebar.info(f"Meta Fixa Diária: R$ {custo_fixo_dia:.2f}\nPerda Diária (Dep
 if menu_escolha == "📝 Lançamento Diário":
     st.title("🚗 Controle Diário (Google Sheets)")
     
-    st.info("💡 Dica: O sistema agora aceita tanto ponto (69.14) quanto vírgula (69,14).")
-    
     c1, c2, c3, c4 = st.columns(4)
     hoje_ganho = c1.number_input("Ganhos Corridas (R$)", value=0.0, step=10.0, format="%.2f")
-    hoje_bonus = c2.number_input("Bônus/Promo (R$)", value=0.0, step=10.0, format="%.2f", help="Dinheiro extra do app (Missão, Quest, etc)")
+    hoje_bonus = c2.number_input("Bônus/Promo (R$)", value=0.0, step=10.0, format="%.2f")
     hoje_km = c3.number_input("KM Rodado", value=0.0, step=5.0, format="%.1f")
     hoje_comb = c4.number_input("Combustível (R$)", value=0.0, step=5.0, format="%.2f")
     obs = st.text_input("Observação")
@@ -213,6 +201,7 @@ if menu_escolha == "📝 Lançamento Diário":
     if hoje_lucro > 0: col2.success(f"💵 LUCRO LÍQUIDO: R$ {hoje_lucro:.2f}")
     else: col2.error(f"💸 PREJUÍZO: R$ {hoje_lucro:.2f}")
 
+    # Gráfico Donut
     labels = ['Lucro (Inclui Bônus)', 'Guardar', 'Combustível']
     values = [max(0, hoje_lucro), hoje_total_guardar, hoje_comb]
     fig = go.Figure(data=[go.Pie(labels=labels, values=values, hole=.5, textinfo='percent', textposition='inside', marker=dict(colors=['#28a745', '#dc3545', '#ffc107'], line=dict(color='#000000', width=1)))])
@@ -221,13 +210,19 @@ if menu_escolha == "📝 Lançamento Diário":
 
     st.markdown("---")
     col_save, col_undo = st.columns([3, 1])
+    
+    # BOTÃO SALVAR COM TRAVA DE SEGURANÇA
     if col_save.button("💾 Salvar no Google Sheets", type="primary", use_container_width=True):
         if (hoje_ganho > 0 or hoje_bonus > 0):
-            with st.spinner("Salvando..."):
-                novo = pd.DataFrame([{'Data': date.today(), 'Ganhos': hoje_ganho, 'Bonus': hoje_bonus, 'Km_Rodado': hoje_km, 'Gastos_Combustivel': hoje_comb, 'Obs': obs}])
-                if salvar_na_nuvem(novo):
-                    st.success("Salvo com sucesso!")
-                    st.cache_data.clear()
+            # TRAVA DE SEGURANÇA: Se valores forem absurdos, avisa antes
+            if hoje_comb > 500 or hoje_km > 1500:
+                st.error(f"⚠️ VALOR SUSPEITO! Você digitou R$ {hoje_comb} de combustível ou {hoje_km} KM. Verifique se não esqueceu a vírgula.")
+            else:
+                with st.spinner("Salvando..."):
+                    novo = pd.DataFrame([{'Data': date.today(), 'Ganhos': hoje_ganho, 'Bonus': hoje_bonus, 'Km_Rodado': hoje_km, 'Gastos_Combustivel': hoje_comb, 'Obs': obs}])
+                    if salvar_na_nuvem(novo):
+                        st.success("Salvo com sucesso!")
+                        st.cache_data.clear()
         else: st.warning("Preencha algum valor.")
             
     if col_undo.button("↩️ Desfazer Último", use_container_width=True):
@@ -237,29 +232,30 @@ if menu_escolha == "📝 Lançamento Diário":
                 st.cache_data.clear()
             else: st.error("Erro ao apagar.")
 
-# --- TELA 2: EXTRATO COMPLETO ---
-elif menu_escolha == "📋 Extrato Completo (Novo)":
+# --- TELA 2: EXTRATO COMPLETO (CORREÇÃO DE DADOS) ---
+elif menu_escolha == "📋 Extrato Completo":
     st.title("📋 Extrato de Lançamentos")
-    st.warning("⚠️ Se houver valores errados (ex: 6914 em vez de 69.14), apague-os aqui pelo ID.")
+    st.warning("🔎 Use esta tela para encontrar e APAGAR lançamentos errados (ex: Combustível 6914).")
     
     df = carregar_dados()
     if not df.empty:
+        # Mostra primeiro os lançamentos mais recentes
         st.dataframe(df.sort_values('Data', ascending=False), width="stretch", column_config={
-            "ID": st.column_config.NumberColumn("ID (Use para apagar)", format="%d"),
+            "ID": st.column_config.NumberColumn("🆔 ID (Para Apagar)", format="%d"),
             "Ganhos": st.column_config.NumberColumn(format="R$ %.2f"),
             "Bonus": st.column_config.NumberColumn(format="R$ %.2f"),
             "Gastos_Combustivel": st.column_config.NumberColumn(format="R$ %.2f"),
             "Km_Rodado": st.column_config.NumberColumn(format="%.1f km")
         })
         
-        st.markdown("### 🗑️ Excluir Lançamento Específico")
+        st.markdown("### 🗑️ Apagar Lançamento Errado")
         col_del1, col_del2 = st.columns([1, 2])
-        id_para_excluir = col_del1.number_input("Digite o ID para apagar:", min_value=0, step=1)
-        if col_del2.button("Apagar Linha com este ID"):
-            if id_para_excluir > 1: # Protege cabeçalho
-                with st.spinner("Apagando..."):
+        id_para_excluir = col_del1.number_input("Digite o ID da linha errada:", min_value=0, step=1)
+        if col_del2.button("❌ Apagar Linha Definitivamente"):
+            if id_para_excluir > 1:
+                with st.spinner("Conectando ao Google e apagando..."):
                     if excluir_linha_pelo_id(id_para_excluir):
-                        st.success(f"Linha {id_para_excluir} apagada!")
+                        st.success(f"Linha {id_para_excluir} apagada com sucesso!")
                         st.cache_data.clear()
                         st.rerun()
             else:
