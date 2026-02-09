@@ -12,7 +12,7 @@ import urllib3
 st.set_page_config(page_title="Gestão Uber Pro", layout="wide")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- LISTA DE MARCAS OFFLINE (GARANTE QUE O MENU SEMPRE APAREÇA) ---
+# --- LISTA FIXA DE MARCAS (PARA GARANTIR QUE O MENU APAREÇA) ---
 MARCAS_FIXAS = {
     "Chevrolet": 23, "Fiat": 21, "Volkswagen": 59, "Ford": 22, 
     "Hyundai": 25, "Toyota": 56, "Honda": 20, "Renault": 44, 
@@ -62,16 +62,12 @@ def carregar_config_nuvem():
         sheet = conectar_gsheets("Config")
         dados = sheet.get_all_values()
         config_dict = {}
-        # Se a planilha estiver vazia (só cabeçalho), usa padrão
-        if len(dados) <= 1:
-            pass 
-        else:
-            for linha in dados[1:]:
-                if len(linha) >= 2:
-                    chave = linha[0]
-                    valor = linha[1]
-                    try: config_dict[chave] = float(valor)
-                    except: config_dict[chave] = valor
+        for linha in dados[1:]:
+            if len(linha) >= 2:
+                chave = linha[0]
+                valor = linha[1]
+                try: config_dict[chave] = float(valor)
+                except: config_dict[chave] = valor
         
         padrao = {
             "valor_carro": 83000.0, "custo_fixo_anual": 6300.0, "dias_trabalho_mes": 4.0,
@@ -107,7 +103,7 @@ def salvar_config_nuvem(nova_config):
         st.error(f"Erro ao salvar config: {e}")
         return False
 
-# --- FUNÇÕES ÚTEIS ---
+# --- FUNÇÕES DE LIMPEZA ---
 def limpar_id_fipe(valor):
     if not valor: return None
     valor_str = str(valor).strip()
@@ -127,7 +123,7 @@ def limpar_valor_hibrido(valor):
     try: return float(val_str)
     except: return 0.0
 
-# --- DADOS E GRÁFICOS ---
+# --- DADOS ---
 def carregar_dados():
     try:
         sheet = conectar_gsheets("Dados")
@@ -174,7 +170,8 @@ def desfazer_ultimo_lancamento():
 headers = {'User-Agent': 'Mozilla/5.0'}
 def get_json(url):
     try:
-        response = requests.get(url, headers=headers, timeout=5, verify=False)
+        # Timeout aumentado e verify=False para evitar erros de conexão
+        response = requests.get(url, headers=headers, timeout=10, verify=False)
         if response.status_code == 200: return response.json()
     except: pass
     return None
@@ -199,7 +196,7 @@ menu_escolha = st.sidebar.radio("Ir para:", ["📝 Lançamento Diário", "📋 E
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Custos & Calculadora")
 
-# --- FIPE COM LISTA FIXA (SOLUÇÃO DO PROBLEMA) ---
+# --- FIPE COM LISTA FIXA (GARANTIDA) ---
 with st.sidebar.expander("🚘 Meu Carro (FIPE)", expanded=True):
     # Carrega dados salvos
     m_id = limpar_id_fipe(config.get('fipe_marca_id'))
@@ -225,17 +222,14 @@ with st.sidebar.expander("🚘 Meu Carro (FIPE)", expanded=True):
     st.markdown("---")
     st.markdown("**Definir/Trocar Carro:**")
     
-    # 1. SELEÇÃO DE MARCA (USA LISTA FIXA - SEMPRE APARECE)
+    # 1. SELEÇÃO DE MARCA (USA LISTA FIXA DO CÓDIGO - SEM INTERNET)
     lista_marcas = sorted(list(MARCAS_FIXAS.keys()))
-    try: idx_chev = lista_marcas.index("Chevrolet")
-    except: idx_chev = 0
-    
-    marca_selecionada = st.selectbox("1. Selecione a Marca", lista_marcas, index=idx_chev)
+    marca_selecionada = st.selectbox("1. Selecione a Marca", lista_marcas, index=0)
     
     if marca_selecionada:
         cod_marca = MARCAS_FIXAS[marca_selecionada]
         
-        # 2. SELEÇÃO DE MODELO (Busca na API)
+        # 2. SELEÇÃO DE MODELO (Só aqui usa internet)
         modelos_data = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos")
         
         if modelos_data:
@@ -273,7 +267,7 @@ with st.sidebar.expander("🚘 Meu Carro (FIPE)", expanded=True):
                         else: st.error("Erro ao buscar valor final.")
                 else: st.info("Carregando anos...")
         else:
-            st.warning(f"Não foi possível carregar modelos da {marca_selecionada}. API FIPE instável.")
+            st.warning(f"Aguardando conexão para buscar modelos da {marca_selecionada}...")
 
 # --- INPUTS ---
 val_carro = st.sidebar.number_input("Valor Veículo (R$)", value=float(config.get('valor_carro', 83000)), format="%.2f")
@@ -364,10 +358,13 @@ else:
     if not df.empty:
         if menu_escolha == "📅 Relatório Semanal":
             df['Chave'] = df['Data'].astype(str).apply(lambda x: f"Semana {pd.to_datetime(x).strftime('%U/%Y')}")
+            titulo = "Semanal"
         elif menu_escolha == "📅 Relatório Mensal":
             df['Chave'] = pd.to_datetime(df['Data']).dt.strftime('%b').map(MESES_PT) + '/' + pd.to_datetime(df['Data']).dt.strftime('%Y')
+            titulo = "Mensal"
         else:
             df['Chave'] = pd.to_datetime(df['Data']).dt.strftime('%Y')
+            titulo = "Anual"
 
         resumo = df.groupby('Chave').agg({'Ganhos':'sum', 'Bonus':'sum', 'Gastos_Combustivel':'sum', 'Km_Rodado':'sum', 'Data':'nunique'}).rename(columns={'Data':'Dias'}).reset_index().sort_values('Chave', ascending=False)
         resumo['Receita_Total'] = resumo['Ganhos'] + resumo['Bonus']
