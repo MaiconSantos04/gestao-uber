@@ -98,10 +98,10 @@ def carregar_config():
         st.session_state['config_user'] = padrao
     return st.session_state['config_user']
 
-# --- ESTILO GRÁFICO (MELHORADO) ---
+# --- ESTILO GRÁFICO (CORRIGIDO R$) ---
 def estilo_grafico(fig, titulo_eixo_y):
-    # Removemos o "R$" do texto fixo para limpar o visual, deixando apenas o número formatado
-    fig.update_traces(texttemplate='%{y:,.2f}', textposition='outside', marker_cornerradius=10)
+    # Adicionado 'R$' de volta no template do texto
+    fig.update_traces(texttemplate='R$ %{y:,.2f}', textposition='outside', marker_cornerradius=10)
     fig.update_layout(title_x=0.5, title_font_size=18, yaxis_title=titulo_eixo_y, xaxis_title=None,
         xaxis=dict(type='category', showgrid=False, showline=False),
         yaxis=dict(showgrid=True, gridcolor='#444444', zerolinecolor='#444444', showline=False),
@@ -181,12 +181,11 @@ if menu_escolha == "📝 Lançamento Diário":
     if hoje_lucro > 0: col2.success(f"💵 LUCRO LÍQUIDO: R$ {hoje_lucro:.2f}")
     else: col2.error(f"💸 PREJUÍZO: R$ {hoje_lucro:.2f}")
 
-    # Gráfico Donut (MELHORADO)
+    # Gráfico Donut (CORRIGIDO DUPLICIDADE)
     labels = ['Lucro (Inclui Bônus)', 'Guardar', 'Combustível']
     values = [max(0, hoje_lucro), hoje_total_guardar, hoje_comb]
-    # textposition='auto' e textinfo='percent' evitam cortes e mostram só %
-    fig = go.Figure(data=[go.Pie(labels=labels, values=values, hole=.5, textinfo='percent', textposition='auto', marker=dict(colors=['#28a745', '#dc3545', '#ffc107'], line=dict(color='#000000', width=1)))])
-    # Aumentei a altura e as margens, e movi a legenda para baixo
+    # Mudei textposition para 'inside' para forçar ficar apenas dentro e não duplicar
+    fig = go.Figure(data=[go.Pie(labels=labels, values=values, hole=.5, textinfo='percent', textposition='inside', marker=dict(colors=['#28a745', '#dc3545', '#ffc107'], line=dict(color='#000000', width=1)))])
     fig.update_layout(height=350, margin=dict(t=30, b=10, l=10, r=10), legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
     st.plotly_chart(fig, width="stretch")
 
