@@ -168,19 +168,26 @@ def get_json(url):
     except: pass
     return None
 
-# --- ESTILO GRÁFICO (COM TOOLTIP CORRIGIDO) ---
+# --- ESTILO GRÁFICO (COM TOOLTIP LIMPO E CORRIGIDO) ---
 def estilo_grafico(fig, titulo_eixo_y):
     fig.update_traces(
         texttemplate='R$ %{y:,.2f}', 
         textposition='outside', 
         marker_cornerradius=10,
-        # AQUI ESTÁ A CORREÇÃO: Mostra "Nome: R$ Valor" limpinho
-        hovertemplate='<b>%{data.name}</b>: R$ %{y:,.2f}<extra></extra>'
+        hovertemplate='<b>%{data.name}</b>: R$ %{y:,.2f}<extra></extra>' # Tooltip Limpo
     )
-    fig.update_layout(title_x=0.5, title_font_size=18, yaxis_title=titulo_eixo_y, xaxis_title=None,
+    fig.update_layout(
+        title_x=0.5, 
+        title_font_size=18, 
+        yaxis_title=titulo_eixo_y, 
+        xaxis_title=None,
         xaxis=dict(type='category', showgrid=False, showline=False),
         yaxis=dict(showgrid=True, gridcolor='#444444', zerolinecolor='#444444', showline=False),
-        plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', margin=dict(t=60, b=30, l=20, r=20), showlegend=False)
+        plot_bgcolor='rgba(0,0,0,0)', 
+        paper_bgcolor='rgba(0,0,0,0)', 
+        margin=dict(t=60, b=30, l=20, r=20), 
+        showlegend=False
+    )
     return fig
 
 MESES_PT = {'Jan': 'Jan', 'Feb': 'Fev', 'Mar': 'Mar', 'Apr': 'Abr', 'May': 'Mai', 'Jun': 'Jun', 'Jul': 'Jul', 'Aug': 'Ago', 'Sep': 'Set', 'Oct': 'Out', 'Nov': 'Nov', 'Dec': 'Dez'}
@@ -325,6 +332,7 @@ else:
 
         resumo = df.groupby('Chave').agg({'Ganhos': 'sum', 'Bonus': 'sum', 'Gastos_Combustivel': 'sum', 'Km_Rodado': 'sum', 'Data': 'nunique'}).rename(columns={'Data': 'Dias'}).reset_index().sort_values('Chave', ascending=False)
         
+        # CÁLCULOS FINAIS
         resumo['Receita_Total'] = resumo['Ganhos'] + resumo['Bonus']
         resumo['IPVA_Seguro_Guardado'] = resumo['Dias'] * custo_fixo_dia
         resumo['Manutencao_Guardada'] = resumo['Km_Rodado'] * val_manut
@@ -344,7 +352,7 @@ else:
             "Lucro_Liquido": st.column_config.NumberColumn("💵 Lucro", format="R$ %.2f")
         })
 
-        # --- AQUI: Renomeando colunas para o gráfico ficar com nomes bonitos no mouse ---
+        # Renomeia para gráfico ficar bonito
         grafico_df = resumo.rename(columns={
             'Ganhos': 'Corridas',
             'Bonus': 'Bônus',
@@ -354,11 +362,18 @@ else:
             'Depreciacao_Guardada': 'Depreciação'
         })
 
+        # AGORA COM TÍTULOS DEFINIDOS (SEM 'UNDEFINED')
         t1, t2, t3 = st.tabs(["Faturamento vs Bônus", "Lucro", "Custos"])
         with t1: 
             fig_fat = px.bar(grafico_df, x='Chave', y=['Corridas', 'Bônus'], title="Composição da Receita", barmode='stack', color_discrete_map={'Corridas': '#00CC96', 'Bônus': '#636EFA'})
             st.plotly_chart(estilo_grafico(fig_fat, "R$"), width="stretch")
-        with t2: st.plotly_chart(estilo_grafico(px.bar(grafico_df, x='Chave', y='Lucro Real', color_discrete_sequence=['#28a745']), "R$"), width="stretch")
-        with t3: st.plotly_chart(estilo_grafico(px.bar(grafico_df, x='Chave', y=['IPVA/Seguro', 'Manutenção', 'Depreciação'], barmode='group'), "R$"), width="stretch")
+        with t2: 
+            # Adicionado title=
+            fig_lucro = px.bar(grafico_df, x='Chave', y='Lucro Real', title="Evolução do Lucro Real", color_discrete_sequence=['#28a745'])
+            st.plotly_chart(estilo_grafico(fig_lucro, "R$"), width="stretch")
+        with t3: 
+            # Adicionado title=
+            fig_custos = px.bar(grafico_df, x='Chave', y=['IPVA/Seguro', 'Manutenção', 'Depreciação'], barmode='group', title="Detalhamento dos Custos")
+            st.plotly_chart(estilo_grafico(fig_custos, "R$"), width="stretch")
     else:
         st.info("Nenhum dado na planilha.")
