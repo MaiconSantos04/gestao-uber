@@ -32,11 +32,12 @@ def conectar_gsheets():
         st.error("⚠️ Planilha 'GestaoUberDB' não encontrada.")
         st.stop()
 
-# --- LIMPEZA DE DADOS ---
+# --- LIMPEZA DE DADOS (LEITURA) ---
 def limpar_valor_brasileiro(valor):
     if isinstance(valor, (int, float)):
         return float(valor)
     valor_str = str(valor).strip().replace('R$', '').replace(' ', '')
+    # Se tiver vírgula, é formato BR. Tira ponto de milhar e troca vírgula por ponto decimal
     if ',' in valor_str:
         valor_str = valor_str.replace('.', '').replace(',', '.')
     try:
@@ -56,7 +57,7 @@ def carregar_dados():
         
         if 'Bonus' not in df.columns: df['Bonus'] = 0.0
 
-        # Cria ID visual (Linha do Excel)
+        # Cria ID visual
         df['ID'] = df.index + 2 
 
         df['Data'] = pd.to_datetime(df['Data']).dt.date
@@ -70,12 +71,27 @@ def carregar_dados():
     except:
         return pd.DataFrame(columns=['Data', 'Ganhos', 'Bonus', 'Km_Rodado', 'Gastos_Combustivel', 'Obs'])
 
+# --- SALVAR NO GOOGLE (CORREÇÃO DE PONTO/VÍRGULA) ---
 def salvar_na_nuvem(nova_linha_df):
     try:
         sheet = conectar_gsheets()
-        nova_linha_df['Data'] = nova_linha_df['Data'].astype(str)
+        
+        # 1. Garante a ordem das colunas
         ordem_colunas = ['Data', 'Ganhos', 'Bonus', 'Km_Rodado', 'Gastos_Combustivel', 'Obs']
         nova_linha_df = nova_linha_df[ordem_colunas]
+        
+        # 2. Converte Data para String
+        nova_linha_df['Data'] = nova_linha_df['Data'].astype(str)
+        
+        # 3. TRUQUE DO BRASIL: Converte os números para STRING COM VÍRGULA antes de enviar
+        # Isso força o Google Sheets a entender como decimal correto
+        cols_valores = ['Ganhos', 'Bonus', 'Km_Rodado', 'Gastos_Combustivel']
+        for col in cols_valores:
+            val = nova_linha_df.iloc[0][col]
+            # Formata com 2 casas decimais e troca ponto por vírgula
+            nova_linha_df.at[0, col] = f"{val:.2f}".replace('.', ',')
+
+        # 4. Envia para a planilha
         lista_dados = nova_linha_df.values.tolist()
         sheet.append_row(lista_dados[0])
         return True
@@ -211,12 +227,12 @@ if menu_escolha == "📝 Lançamento Diário":
     st.markdown("---")
     col_save, col_undo = st.columns([3, 1])
     
-    # BOTÃO SALVAR COM TRAVA DE SEGURANÇA
+    # BOTÃO SALVAR COM CONVERSÃO BRASILEIRA FORÇADA
     if col_save.button("💾 Salvar no Google Sheets", type="primary", use_container_width=True):
         if (hoje_ganho > 0 or hoje_bonus > 0):
-            # TRAVA DE SEGURANÇA: Se valores forem absurdos, avisa antes
-            if hoje_comb > 500 or hoje_km > 1500:
-                st.error(f"⚠️ VALOR SUSPEITO! Você digitou R$ {hoje_comb} de combustível ou {hoje_km} KM. Verifique se não esqueceu a vírgula.")
+            # Trava anti-absurdo
+            if hoje_comb > 800 or hoje_km > 2000:
+                st.error(f"⚠️ Valor muito alto (R$ {hoje_comb} ou {hoje_km} km). Verifique se não esqueceu a vírgula.")
             else:
                 with st.spinner("Salvando..."):
                     novo = pd.DataFrame([{'Data': date.today(), 'Ganhos': hoje_ganho, 'Bonus': hoje_bonus, 'Km_Rodado': hoje_km, 'Gastos_Combustivel': hoje_comb, 'Obs': obs}])
@@ -232,14 +248,13 @@ if menu_escolha == "📝 Lançamento Diário":
                 st.cache_data.clear()
             else: st.error("Erro ao apagar.")
 
-# --- TELA 2: EXTRATO COMPLETO (CORREÇÃO DE DADOS) ---
+# --- TELA 2: EXTRATO COMPLETO ---
 elif menu_escolha == "📋 Extrato Completo":
     st.title("📋 Extrato de Lançamentos")
-    st.warning("🔎 Use esta tela para encontrar e APAGAR lançamentos errados (ex: Combustível 6914).")
+    st.warning("⚠️ Se encontrar valores errados (ex: 6914 em vez de 69,14), use o botão abaixo para apagar.")
     
     df = carregar_dados()
     if not df.empty:
-        # Mostra primeiro os lançamentos mais recentes
         st.dataframe(df.sort_values('Data', ascending=False), width="stretch", column_config={
             "ID": st.column_config.NumberColumn("🆔 ID (Para Apagar)", format="%d"),
             "Ganhos": st.column_config.NumberColumn(format="R$ %.2f"),
@@ -250,12 +265,12 @@ elif menu_escolha == "📋 Extrato Completo":
         
         st.markdown("### 🗑️ Apagar Lançamento Errado")
         col_del1, col_del2 = st.columns([1, 2])
-        id_para_excluir = col_del1.number_input("Digite o ID da linha errada:", min_value=0, step=1)
+        id_para_excluir = col_del1.number_input("Digite o ID para apagar:", min_value=0, step=1)
         if col_del2.button("❌ Apagar Linha Definitivamente"):
             if id_para_excluir > 1:
-                with st.spinner("Conectando ao Google e apagando..."):
+                with st.spinner("Apagando..."):
                     if excluir_linha_pelo_id(id_para_excluir):
-                        st.success(f"Linha {id_para_excluir} apagada com sucesso!")
+                        st.success(f"Linha {id_para_excluir} apagada!")
                         st.cache_data.clear()
                         st.rerun()
             else:
