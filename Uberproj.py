@@ -32,16 +32,28 @@ def conectar_gsheets():
         st.error("⚠️ Planilha 'GestaoUberDB' não encontrada.")
         st.stop()
 
-# --- LIMPEZA DE DADOS (LEITURA) ---
-def limpar_valor_brasileiro(valor):
+# --- LIMPEZA DE DADOS (CORREÇÃO DO ERRO X100) ---
+def limpar_valor_hibrido(valor):
+    # Se já for número, retorna direto (evita o erro do ponto ser removido)
     if isinstance(valor, (int, float)):
         return float(valor)
-    valor_str = str(valor).strip().replace('R$', '').replace(' ', '')
-    # Se tiver vírgula, é formato BR. Tira ponto de milhar e troca vírgula por ponto decimal
-    if ',' in valor_str:
-        valor_str = valor_str.replace('.', '').replace(',', '.')
+    
+    val_str = str(valor).strip().replace('R$', '').replace(' ', '')
+    
+    # Se tiver PONTO e NÃO tiver vírgula, assume que já é formato internacional (69.14)
+    if '.' in val_str and ',' not in val_str:
+        try:
+            return float(val_str)
+        except:
+            pass # Se falhar, tenta o método BR abaixo
+            
+    # Formato Brasileiro (1.000,00 -> 1000.00)
+    if ',' in val_str:
+        val_str = val_str.replace('.', '') # Remove ponto de milhar
+        val_str = val_str.replace(',', '.') # Troca vírgula por ponto
+        
     try:
-        return float(valor_str)
+        return float(val_str)
     except:
         return 0.0
 
@@ -49,49 +61,59 @@ def limpar_valor_brasileiro(valor):
 def carregar_dados():
     try:
         sheet = conectar_gsheets()
-        dados = sheet.get_all_records()
-        df = pd.DataFrame(dados)
+        # Pega valores crus (raw) para evitar confusão de formatação
+        dados = sheet.get_all_values()
         
-        if df.empty:
+        # Se só tiver o cabeçalho ou estiver vazia
+        if len(dados) < 2:
             return pd.DataFrame(columns=['Data', 'Ganhos', 'Bonus', 'Km_Rodado', 'Gastos_Combustivel', 'Obs'])
+            
+        # Cria DataFrame usando a primeira linha como cabeçalho
+        cabecalho = dados[0]
+        linhas = dados[1:]
+        df = pd.DataFrame(linhas, columns=cabecalho)
         
-        if 'Bonus' not in df.columns: df['Bonus'] = 0.0
+        # Garante colunas mínimas
+        colunas_padrao = ['Data', 'Ganhos', 'Bonus', 'Km_Rodado', 'Gastos_Combustivel', 'Obs']
+        for col in colunas_padrao:
+            if col not in df.columns:
+                df[col] = "0"
 
-        # Cria ID visual
+        # Cria ID visual (Linha do Excel = Index + 2)
         df['ID'] = df.index + 2 
 
-        df['Data'] = pd.to_datetime(df['Data']).dt.date
+        df['Data'] = pd.to_datetime(df['Data'], errors='coerce').dt.date
         
+        # Aplica a limpeza corrigida
         cols_num = ['Ganhos', 'Bonus', 'Km_Rodado', 'Gastos_Combustivel']
         for col in cols_num:
-            if col in df.columns:
-                df[col] = df[col].apply(limpar_valor_brasileiro)
+            df[col] = df[col].apply(limpar_valor_hibrido)
             
         return df
-    except:
+    except Exception as e:
+        st.error(f"Erro ao carregar: {e}")
         return pd.DataFrame(columns=['Data', 'Ganhos', 'Bonus', 'Km_Rodado', 'Gastos_Combustivel', 'Obs'])
 
-# --- SALVAR NO GOOGLE (CORREÇÃO DE PONTO/VÍRGULA) ---
 def salvar_na_nuvem(nova_linha_df):
     try:
         sheet = conectar_gsheets()
-        
-        # 1. Garante a ordem das colunas
+        nova_linha_df['Data'] = nova_linha_df['Data'].astype(str)
         ordem_colunas = ['Data', 'Ganhos', 'Bonus', 'Km_Rodado', 'Gastos_Combustivel', 'Obs']
+        
+        # Garante que o DataFrame tem todas as colunas
+        for col in ordem_colunas:
+            if col not in nova_linha_df.columns:
+                nova_linha_df[col] = ""
+                
         nova_linha_df = nova_linha_df[ordem_colunas]
         
-        # 2. Converte Data para String
-        nova_linha_df['Data'] = nova_linha_df['Data'].astype(str)
-        
-        # 3. TRUQUE DO BRASIL: Converte os números para STRING COM VÍRGULA antes de enviar
-        # Isso força o Google Sheets a entender como decimal correto
+        # Formata para Brasileiro antes de enviar (Vírgula)
         cols_valores = ['Ganhos', 'Bonus', 'Km_Rodado', 'Gastos_Combustivel']
         for col in cols_valores:
             val = nova_linha_df.iloc[0][col]
-            # Formata com 2 casas decimais e troca ponto por vírgula
-            nova_linha_df.at[0, col] = f"{val:.2f}".replace('.', ',')
+            if isinstance(val, (int, float)):
+                nova_linha_df.at[0, col] = f"{val:.2f}".replace('.', ',')
 
-        # 4. Envia para a planilha
         lista_dados = nova_linha_df.values.tolist()
         sheet.append_row(lista_dados[0])
         return True
@@ -227,18 +249,13 @@ if menu_escolha == "📝 Lançamento Diário":
     st.markdown("---")
     col_save, col_undo = st.columns([3, 1])
     
-    # BOTÃO SALVAR COM CONVERSÃO BRASILEIRA FORÇADA
     if col_save.button("💾 Salvar no Google Sheets", type="primary", use_container_width=True):
         if (hoje_ganho > 0 or hoje_bonus > 0):
-            # Trava anti-absurdo
-            if hoje_comb > 800 or hoje_km > 2000:
-                st.error(f"⚠️ Valor muito alto (R$ {hoje_comb} ou {hoje_km} km). Verifique se não esqueceu a vírgula.")
-            else:
-                with st.spinner("Salvando..."):
-                    novo = pd.DataFrame([{'Data': date.today(), 'Ganhos': hoje_ganho, 'Bonus': hoje_bonus, 'Km_Rodado': hoje_km, 'Gastos_Combustivel': hoje_comb, 'Obs': obs}])
-                    if salvar_na_nuvem(novo):
-                        st.success("Salvo com sucesso!")
-                        st.cache_data.clear()
+            with st.spinner("Salvando..."):
+                novo = pd.DataFrame([{'Data': date.today(), 'Ganhos': hoje_ganho, 'Bonus': hoje_bonus, 'Km_Rodado': hoje_km, 'Gastos_Combustivel': hoje_comb, 'Obs': obs}])
+                if salvar_na_nuvem(novo):
+                    st.success("Salvo com sucesso!")
+                    st.cache_data.clear() # Limpa o cache para mostrar o valor certo
         else: st.warning("Preencha algum valor.")
             
     if col_undo.button("↩️ Desfazer Último", use_container_width=True):
@@ -251,22 +268,21 @@ if menu_escolha == "📝 Lançamento Diário":
 # --- TELA 2: EXTRATO COMPLETO ---
 elif menu_escolha == "📋 Extrato Completo":
     st.title("📋 Extrato de Lançamentos")
-    st.warning("⚠️ Se encontrar valores errados (ex: 6914 em vez de 69,14), use o botão abaixo para apagar.")
     
     df = carregar_dados()
     if not df.empty:
         st.dataframe(df.sort_values('Data', ascending=False), width="stretch", column_config={
-            "ID": st.column_config.NumberColumn("🆔 ID (Para Apagar)", format="%d"),
+            "ID": st.column_config.NumberColumn("🆔 ID", format="%d"),
             "Ganhos": st.column_config.NumberColumn(format="R$ %.2f"),
             "Bonus": st.column_config.NumberColumn(format="R$ %.2f"),
             "Gastos_Combustivel": st.column_config.NumberColumn(format="R$ %.2f"),
             "Km_Rodado": st.column_config.NumberColumn(format="%.1f km")
         })
         
-        st.markdown("### 🗑️ Apagar Lançamento Errado")
+        st.markdown("### 🗑️ Apagar Lançamento")
         col_del1, col_del2 = st.columns([1, 2])
         id_para_excluir = col_del1.number_input("Digite o ID para apagar:", min_value=0, step=1)
-        if col_del2.button("❌ Apagar Linha Definitivamente"):
+        if col_del2.button("❌ Apagar Linha"):
             if id_para_excluir > 1:
                 with st.spinner("Apagando..."):
                     if excluir_linha_pelo_id(id_para_excluir):
