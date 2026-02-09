@@ -92,7 +92,18 @@ def salvar_config_nuvem(nova_config):
         st.error(f"Erro ao salvar config: {e}")
         return False
 
-# --- LIMPEZA DE DADOS ---
+# --- FUNÇÃO DE LIMPEZA FIPE (CRÍTICA) ---
+def limpar_id_fipe(valor):
+    if not valor: return ""
+    valor_str = str(valor).strip()
+    # Tenta converter pra float e depois int (ex: "59.0" -> 59.0 -> 59 -> "59")
+    try:
+        return str(int(float(valor_str)))
+    except:
+        # Se não der (ex: "2023-1"), retorna a string limpa
+        return valor_str
+
+# --- LIMPEZA DE DADOS FINANCEIROS ---
 def limpar_valor_hibrido(valor):
     if isinstance(valor, (int, float)): return float(valor)
     val_str = str(valor).strip().replace('R$', '').replace(' ', '')
@@ -195,16 +206,20 @@ menu_escolha = st.sidebar.radio("Ir para:", ["📝 Lançamento Diário", "📋 E
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Custos & Calculadora")
 
-# --- FIPE COM CORREÇÃO ---
+# --- FIPE COM LIMPEZA PROFUNDA ---
 with st.sidebar.expander("🚘 Meu Carro (FIPE)", expanded=True):
-    if config.get('fipe_marca_id') and config.get('fipe_modelo_id'):
-        st.success(f"Carro Salvo: **{config.get('fipe_nome_carro')}**")
+    # Verifica se existem dados salvos
+    tem_carro = config.get('fipe_marca_id') and config.get('fipe_modelo_id')
+    
+    if tem_carro:
+        st.success(f"Carro Salvo: **{config.get('fipe_nome_carro', 'Seu Carro')}**")
+        
         if st.button("🔄 Atualizar Preço FIPE Agora"):
-            with st.spinner("Buscando valor atualizado na FIPE..."):
-                # LIMPEZA CRÍTICA: Remove '.0' se o Google Sheets tiver adicionado
-                m_id = str(config['fipe_marca_id']).replace('.0', '').strip()
-                mod_id = str(config['fipe_modelo_id']).replace('.0', '').strip()
-                a_id = str(config['fipe_ano_id']).replace('.0', '').strip()
+            with st.spinner("Conectando na FIPE..."):
+                # LIMPEZA PROFUNDA DOS CÓDIGOS
+                m_id = limpar_id_fipe(config['fipe_marca_id'])
+                mod_id = limpar_id_fipe(config['fipe_modelo_id'])
+                a_id = limpar_id_fipe(config['fipe_ano_id'])
                 
                 url = f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{m_id}/modelos/{mod_id}/anos/{a_id}"
                 dados_fipe = get_json(url)
@@ -214,13 +229,12 @@ with st.sidebar.expander("🚘 Meu Carro (FIPE)", expanded=True):
                     novo_valor = float(valor_str.replace("R$ ", "").replace(".", "").replace(",", "."))
                     config['valor_carro'] = novo_valor
                     st.session_state['config_user']['valor_carro'] = novo_valor
-                    
-                    # Salva o novo preço na nuvem automaticamente para não perder
                     salvar_config_nuvem(st.session_state['config_user'])
-                    st.success(f"Sucesso! Novo valor: {valor_str}")
+                    st.success(f"Atualizado: {valor_str}")
                     st.rerun()
                 else:
-                    st.error("Erro ao conectar na FIPE. Verifique se o código do carro mudou.")
+                    st.error("Erro na FIPE. Os códigos salvos podem estar inválidos.")
+                    st.warning("⚠️ Solução: Selecione seu carro novamente na lista abaixo e clique em 'Salvar Carro como Padrão'.")
     else:
         st.info("Selecione seu carro abaixo para salvar.")
 
@@ -279,7 +293,6 @@ with st.sidebar.expander("🛠️ Manutenção/Depreciação", expanded=False):
 custo_fixo_mensal = val_fixo / 12
 custo_fixo_dia = custo_fixo_mensal / dias_mes if dias_mes > 0 else 0
 
-# Para Stop Loss, diluímos pelo KM médio do dia
 custo_fixo_km = custo_fixo_dia / media_km_dia if media_km_dia > 0 else 0
 custo_gas_km = preco_gasolina / consumo_carro if consumo_carro > 0 else 0
 custo_km_total = custo_fixo_km + custo_gas_km + val_manut + val_deprec
@@ -293,7 +306,7 @@ if st.sidebar.button("💾 Salvar Parâmetros (Nuvem)"):
     config_atual = st.session_state['config_user']
     nova_config = {
         "valor_carro": val_carro, "custo_fixo_anual": val_fixo, 
-        "dias_trabalho_mes": dias_mes, # Salva o novo campo
+        "dias_trabalho_mes": dias_mes, 
         "custo_manut_km": val_manut, "custo_deprec_km": val_deprec,
         "media_km_dia": media_km_dia, "consumo_carro": consumo_carro, "preco_gasolina": preco_gasolina,
         "fipe_marca_id": config_atual.get("fipe_marca_id", ""),
