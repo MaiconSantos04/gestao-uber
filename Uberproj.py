@@ -14,7 +14,8 @@ import random
 st.set_page_config(page_title="Gestão Uber Pro", layout="wide")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- SISTEMA FIPE BLINDADO (MANTIDO O QUE FUNCIONOU) ---
+# --- SISTEMA FIPE BLINDADO (CACHE + FALLBACK) ---
+# Evita travamentos buscando em múltiplas fontes
 HEADERS_ROTATIVOS = [
     {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'},
     {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15'}
@@ -26,11 +27,15 @@ def buscar_marcas_blindado():
         resp = requests.get("https://parallelum.com.br/fipe/api/v1/carros/marcas", headers=random.choice(HEADERS_ROTATIVOS), timeout=3, verify=False)
         if resp.status_code == 200: return {m['nome']: m['codigo'] for m in resp.json()}
     except: pass
-    try:
-        resp = requests.get("https://brasilapi.com.br/api/fipe/marcas/v1/carros", headers=random.choice(HEADERS_ROTATIVOS), timeout=3)
-        if resp.status_code == 200: return {m['nome']: m['valor'] for m in resp.json()}
-    except: pass
-    return {"Chevrolet": "23", "Fiat": "21", "Volkswagen": "59", "Ford": "22", "Hyundai": "25", "Toyota": "56", "Honda": "20", "Renault": "44", "Nissan": "43", "Jeep": "29"}
+    
+    # Fallback Offline garantido
+    return {
+        "Chevrolet": "23", "Fiat": "21", "Volkswagen": "59", "Ford": "22", 
+        "Hyundai": "25", "Toyota": "56", "Honda": "20", "Renault": "44", 
+        "Nissan": "43", "Jeep": "29", "Caoa Chery": "136", "Citroën": "11",
+        "Peugeot": "41", "Mitsubishi": "40", "BMW": "7", "Mercedes-Benz": "39", 
+        "Audi": "6", "Kia": "31", "BYD": "176"
+    }
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def buscar_modelos(cod_marca):
@@ -81,7 +86,11 @@ def carregar_config():
     try:
         ws = conectar_gsheets("Config"); data = ws.get_all_values()
         cfg = {r[0]: r[1] for r in data[1:] if len(r)>1}
-        padrao = {"valor_carro": 83000.0, "custo_fixo_anual": 6300.0, "dias_trabalho_mes": 4.0, "media_km_dia": 150.0, "consumo_carro": 10.0, "preco_gasolina": 5.80, "custo_manut_km": 0.25, "custo_deprec_km": 0.40, "fipe_nome_carro": "Não Definido"}
+        padrao = {
+            "valor_carro": 83000.0, "custo_fixo_anual": 6300.0, "dias_trabalho_mes": 4.0, 
+            "media_km_dia": 150.0, "consumo_carro": 10.0, "preco_gasolina": 5.80, 
+            "custo_manut_km": 0.25, "custo_deprec_km": 0.40, "fipe_nome_carro": "Não Definido"
+        }
         final = {k: float(v) if k not in ['fipe_nome_carro','fipe_marca_id','fipe_modelo_id','fipe_ano_id'] else v for k,v in cfg.items()}
         st.session_state['config_user'] = {**padrao, **final}
         return st.session_state['config_user']
@@ -130,7 +139,7 @@ def desfazer():
     try: ws = conectar_gsheets("Dados"); ws.delete_rows(len(ws.get_all_values())); return True
     except: return False
 
-# --- GRÁFICOS (RESTAURADOS) ---
+# --- GRÁFICOS (DESIGN RESTAURADO) ---
 def estilo_grafico(fig, titulo_y):
     fig.update_traces(texttemplate='R$ %{y:,.2f}', textposition='outside', marker_cornerradius=5, hovertemplate='<b>%{data.name}</b>: R$ %{y:,.2f}<extra></extra>')
     fig.update_layout(title_x=0.5, yaxis_title=titulo_y, xaxis_title=None, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', showlegend=False, margin=dict(t=60, b=30, l=20, r=20))
@@ -138,7 +147,7 @@ def estilo_grafico(fig, titulo_y):
 
 MESES = {'Jan':'Jan', 'Feb':'Fev', 'Mar':'Mar', 'Apr':'Abr', 'May':'Mai', 'Jun':'Jun', 'Jul':'Jul', 'Aug':'Ago', 'Sep':'Set', 'Oct':'Out', 'Nov':'Nov', 'Dec':'Dez'}
 
-# --- APP ---
+# --- APP PRINCIPAL ---
 config = carregar_config()
 
 st.sidebar.title("Navegação")
@@ -147,7 +156,7 @@ menu = st.sidebar.radio("Ir para:", ["📝 Lançamento Diário", "📋 Extrato C
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Custos & Calculadora")
 
-# --- SEÇÃO 1: FIPE (COM ABAS - CORREÇÃO QUE FUNCIONOU) ---
+# --- BLOCO FIPE (COM ABAS PARA NÃO TRAVAR) ---
 with st.sidebar.expander("🚘 Meu Carro (FIPE)", expanded=True):
     st.info(f"Carro Atual: **{config.get('fipe_nome_carro', '---')}**\n\nValor Base: **R$ {config.get('valor_carro', 0):,.2f}**")
     
@@ -174,7 +183,7 @@ with st.sidebar.expander("🚘 Meu Carro (FIPE)", expanded=True):
                                 salvar_config(config); st.success(f"Atualizado: {v}"); st.rerun()
                             else: st.error("Erro busca.")
                     else: st.info("Carregando anos...")
-            else: st.warning("Use aba Manual.")
+            else: st.warning("Use aba Manual se demorar.")
 
     with t_man:
         n_man = st.text_input("Nome", config.get('fipe_nome_carro',''), key="nm_man")
@@ -183,12 +192,11 @@ with st.sidebar.expander("🚘 Meu Carro (FIPE)", expanded=True):
             config.update({'valor_carro': v_man, 'fipe_nome_carro': n_man, 'fipe_marca_id':'', 'fipe_modelo_id':''})
             salvar_config(config); st.success("Salvo!"); st.rerun()
 
-# --- SEÇÃO 2: INPUTS RESTAURADOS (ORGANIZADOS COMO ANTES) ---
-with st.sidebar.expander("📝 Parâmetros Gerais", expanded=False):
-    # O valor do carro vem da FIPE acima, aqui só mostra
+# --- INPUTS FINANCEIROS (ORGANIZAÇÃO RESTAURADA) ---
+with st.sidebar.expander("📝 Parâmetros do Carro", expanded=False):
     st.write(f"Valor Veículo: R$ {config.get('valor_carro', 0):,.2f}")
     v_fixo = st.number_input("IPVA+Seguro Anual (R$)", value=float(config.get('custo_fixo_anual', 6000)), format="%.2f")
-    dias_mes = st.number_input("Dias Trab/Mês", value=int(config.get('dias_trabalho_mes', 4)))
+    dias_mes = st.number_input("Dias trab/mês", value=int(config.get('dias_trabalho_mes', 4)))
 
 with st.sidebar.expander("⛽ Combustível e Rodagem", expanded=True):
     km_med = st.number_input("Média KM/Dia", value=float(config.get('media_km_dia', 150)))
@@ -199,22 +207,34 @@ with st.sidebar.expander("🛠️ Manutenção/Depreciação", expanded=False):
     c_manut = st.number_input("Manut/km (R$)", value=float(config.get('custo_manut_km', 0.25)), format="%.2f", step=0.05)
     c_deprec = st.number_input("Deprec/km (R$)", value=float(config.get('custo_deprec_km', 0.40)), format="%.2f", step=0.05)
 
-# CÁLCULOS STOP LOSS
-custo_dia_fixo = (v_fixo/12) / dias_mes if dias_mes else 0
-custo_km_fixo = custo_dia_fixo / km_med if km_med else 0
-custo_km_gas = pr_gas / cons if cons else 0
-stop_loss = custo_km_fixo + custo_km_gas + c_manut + c_deprec
+# --- CÁLCULOS CRÍTICOS (STOP LOSS RESTAURADO) ---
+custo_dia_fixo = (v_fixo/12) / dias_mes if dias_mes > 0 else 0
+# Diluição para Stop Loss
+custo_ipva_km = custo_dia_fixo / km_med if km_med > 0 else 0
+custo_gas_km = pr_gas / cons if cons > 0 else 0
+stop_loss = custo_ipva_km + custo_gas_km + c_manut + c_deprec
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### ⛔ STOP LOSS (Mínimo)")
 st.sidebar.metric("Aceitar acima de:", f"R$ {stop_loss:.2f} / km")
-st.sidebar.caption(f"Meta Diária IPVA: **R$ {custo_dia_fixo:.2f}**")
+
+# AQUI ESTÁ O QUE FALTAVA: A EXPLICAÇÃO DO CUSTO
+st.sidebar.caption(
+    f"""
+    **Composição:**
+    ⛽ Gasolina: R$ {custo_gas_km:.2f}
+    🏦 IPVA (Diluído): R$ {custo_ipva_km:.2f}
+    🛠️ Manutenção: R$ {c_manut:.2f}
+    📉 Depreciação: R$ {c_deprec:.2f}
+    """
+)
+st.sidebar.info(f"Meta Diária IPVA: **R$ {custo_dia_fixo:.2f}** (Base {dias_mes} dias)")
 
 if st.sidebar.button("💾 Salvar Parâmetros"):
     config.update({"custo_fixo_anual":v_fixo, "dias_trabalho_mes":dias_mes, "media_km_dia":km_med, "preco_gasolina":pr_gas, "consumo_carro":cons, "custo_manut_km":c_manut, "custo_deprec_km":c_deprec})
     salvar_config(config); st.sidebar.success("Salvo!"); st.rerun()
 
-# --- PÁGINAS RESTAURADAS ---
+# --- PÁGINAS ---
 if menu == "📝 Lançamento Diário":
     st.title("🚗 Controle Diário")
     c1, c2, c3, c4 = st.columns(4)
@@ -238,9 +258,9 @@ if menu == "📝 Lançamento Diário":
     else: k2.error(f"💸 PREJUÍZO: R$ {dia_lucro:.2f}")
     
     media_hj = (ganhos+bonus)/km if km>0 else 0
-    k3.metric("Sua Média Hoje", f"R$ {media_hj:.2f} / km", delta=f"{media_hj - stop_loss:.2f} sobre o mínimo")
+    k3.metric("Sua Média Hoje", f"R$ {media_hj:.2f} / km", delta=f"{media_hj - stop_loss:.2f} vs Min")
 
-    # GRÁFICO PIZZA (RESTAURADO)
+    # Gráfico Pizza
     fig = go.Figure(data=[go.Pie(labels=['Lucro','Guardar (IPVA+Manut+Deprec)','Combustível'], 
                                  values=[max(0, dia_lucro), dia_guardar, gas], 
                                  hole=.5, textinfo='percent', textposition='inside', 
@@ -289,15 +309,15 @@ else:
             df['Chave'] = df['Data'].apply(lambda x: str(x.year))
             tit = "Anual"
 
-        # AGREGAMENTO
+        # CÁLCULOS COMPLETOS DE RELATÓRIO
         res = df.groupby('Chave').agg({'Ganhos':'sum', 'Bonus':'sum', 'Gastos_Combustivel':'sum', 'Km_Rodado':'sum', 'Data':'nunique'}).rename(columns={'Data':'Dias'}).reset_index().sort_values('Chave', ascending=False)
         
-        # CÁLCULOS FINAIS
         res['Receita_Total'] = res['Ganhos'] + res['Bonus']
-        res['IPVA_Seguro_Guardado'] = res['Dias'] * custo_dia_fixo
-        res['Manutencao_Guardada'] = res['Km_Rodado'] * c_manut
-        res['Depreciacao_Guardada'] = res['Km_Rodado'] * c_deprec
-        res['Lucro_Liquido'] = res['Receita_Total'] - res['Gastos_Combustivel'] - res['IPVA_Seguro_Guardado'] - res['Manutencao_Guardada'] - res['Depreciacao_Guardada']
+        # Usa o cálculo do método 2 (caixa) para o relatório
+        res['IPVA_Guardado'] = res['Dias'] * custo_dia_fixo
+        res['Manut_Guardada'] = res['Km_Rodado'] * c_manut
+        res['Deprec_Guardada'] = res['Km_Rodado'] * c_deprec
+        res['Lucro_Liquido'] = res['Receita_Total'] - res['Gastos_Combustivel'] - res['IPVA_Guardado'] - res['Manut_Guardada'] - res['Deprec_Guardada']
 
         st.title(f"Relatório {tit}")
         st.dataframe(res, hide_index=True, use_container_width=True, column_config={
@@ -306,16 +326,15 @@ else:
             "Bonus": st.column_config.NumberColumn("🎁 Bônus", format="R$ %.2f"),
             "Gastos_Combustivel": st.column_config.NumberColumn("⛽ Gasolina", format="R$ %.2f"),
             "Km_Rodado": st.column_config.NumberColumn("🛣️ KM", format="%.1f km"),
-            "IPVA_Seguro_Guardado": st.column_config.NumberColumn("🏦 IPVA", format="R$ %.2f"),
-            "Manutencao_Guardada": st.column_config.NumberColumn("🛠️ Manut", format="R$ %.2f"),
-            "Depreciacao_Guardada": st.column_config.NumberColumn("📉 Deprec", format="R$ %.2f"),
+            "IPVA_Guardado": st.column_config.NumberColumn("🏦 IPVA", format="R$ %.2f"),
+            "Manut_Guardada": st.column_config.NumberColumn("🛠️ Manut", format="R$ %.2f"),
+            "Deprec_Guardada": st.column_config.NumberColumn("📉 Deprec", format="R$ %.2f"),
             "Lucro_Liquido": st.column_config.NumberColumn("💵 Lucro", format="R$ %.2f")
         })
 
-        # RENOMEIA PARA GRÁFICOS
-        gdf = res.rename(columns={'Ganhos':'Corridas', 'Bonus':'Bônus', 'Lucro_Liquido':'Lucro Real', 'IPVA_Seguro_Guardado':'IPVA/Seguro', 'Manutencao_Guardada':'Manutenção', 'Depreciacao_Guardada':'Depreciação'})
+        # PREPARAÇÃO PARA GRÁFICOS (RENOMEAR PARA FICAR BONITO NO TOOLTIP)
+        gdf = res.rename(columns={'Ganhos':'Corridas', 'Bonus':'Bônus', 'Lucro_Liquido':'Lucro Real', 'IPVA_Guardado':'IPVA/Seguro', 'Manut_Guardada':'Manutenção', 'Deprec_Guardada':'Depreciação'})
         
-        # ABAS DOS GRÁFICOS (RESTAURADAS)
         t1, t2, t3 = st.tabs(["Faturamento vs Bônus", "Lucro", "Custos"])
         
         with t1:
@@ -327,8 +346,8 @@ else:
             st.plotly_chart(estilo_grafico(fig_luc, "R$"), use_container_width=True)
             
         with t3:
-            # O GRÁFICO DE COMPOSIÇÃO DE CUSTO QUE FALTAVA
+            # ESTE É O GRÁFICO QUE VOCÊ SENTIU FALTA
             fig_cus = px.bar(gdf, x='Chave', y=['IPVA/Seguro', 'Manutenção', 'Depreciação'], title="Detalhamento dos Custos", barmode='group')
             st.plotly_chart(estilo_grafico(fig_cus, "R$"), use_container_width=True)
     else:
-        st.info("Nenhum dado na planilha.")
+        st.info("Nenhum dado lançado ainda.")
