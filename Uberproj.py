@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import requests
-import json
 import plotly.graph_objects as go
 import plotly.express as px
 from datetime import date
@@ -33,6 +32,25 @@ def conectar_gsheets():
         st.error("⚠️ Planilha 'GestaoUberDB' não encontrada.")
         st.stop()
 
+# --- FUNÇÃO DE LIMPEZA INTELIGENTE (RESOLVE O ERRO DOS VALORES) ---
+def limpar_valor_brasileiro(valor):
+    if isinstance(valor, (int, float)):
+        return float(valor)
+    
+    valor_str = str(valor).strip()
+    # Remove R$ e espaços
+    valor_str = valor_str.replace('R$', '').replace(' ', '')
+    
+    # Lógica Brasileira:
+    # Se tem vírgula, assume que é decimal (ex: 1.200,50 -> tira ponto, troca virgula por ponto)
+    if ',' in valor_str:
+        valor_str = valor_str.replace('.', '').replace(',', '.')
+    
+    try:
+        return float(valor_str)
+    except:
+        return 0.0
+
 # --- FUNÇÕES DE DADOS ---
 def carregar_dados():
     try:
@@ -45,13 +63,16 @@ def carregar_dados():
         
         if 'Bonus' not in df.columns: df['Bonus'] = 0.0
 
+        # Adiciona índice visual (ID) para ajudar a excluir
+        df['ID'] = df.index + 2 # +2 porque linha 1 é cabeçalho no Sheets
+
         df['Data'] = pd.to_datetime(df['Data']).dt.date
         
         cols_num = ['Ganhos', 'Bonus', 'Km_Rodado', 'Gastos_Combustivel']
         for col in cols_num:
             if col in df.columns:
-                df[col] = df[col].astype(str).str.replace(',', '.').replace('', '0')
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
+                # Aplica a limpeza inteligente em cada valor
+                df[col] = df[col].apply(limpar_valor_brasileiro)
             
         return df
     except:
@@ -68,6 +89,15 @@ def salvar_na_nuvem(nova_linha_df):
         return True
     except Exception as e:
         st.error(f"Erro ao salvar: {e}")
+        return False
+
+def excluir_linha_pelo_id(id_linha):
+    try:
+        sheet = conectar_gsheets()
+        sheet.delete_rows(id_linha)
+        return True
+    except Exception as e:
+        st.error(f"Erro ao excluir: {e}")
         return False
 
 def desfazer_ultimo_lancamento():
@@ -114,7 +144,7 @@ config = carregar_config()
 
 # --- BARRA LATERAL ---
 st.sidebar.title("Navegação")
-menu_escolha = st.sidebar.radio("Ir para:", ["📝 Lançamento Diário", "📅 Relatório Semanal", "📅 Relatório Mensal", "📅 Relatório Anual"])
+menu_escolha = st.sidebar.radio("Ir para:", ["📝 Lançamento Diário", "📋 Extrato Completo (Novo)", "📅 Relatório Semanal", "📅 Relatório Mensal", "📅 Relatório Anual"])
 
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Configurações")
@@ -163,6 +193,8 @@ st.sidebar.info(f"Meta Fixa Diária: R$ {custo_fixo_dia:.2f}\nPerda Diária (Dep
 if menu_escolha == "📝 Lançamento Diário":
     st.title("🚗 Controle Diário (Google Sheets)")
     
+    st.info("💡 Dica: Ao digitar valores, use vírgula para centavos (ex: 69,14).")
+    
     c1, c2, c3, c4 = st.columns(4)
     hoje_ganho = c1.number_input("Ganhos Corridas (R$)", value=0.0, step=10.0, format="%.2f")
     hoje_bonus = c2.number_input("Bônus/Promo (R$)", value=0.0, step=10.0, format="%.2f", help="Dinheiro extra do app (Missão, Quest, etc)")
@@ -180,7 +212,6 @@ if menu_escolha == "📝 Lançamento Diário":
     if hoje_lucro > 0: col2.success(f"💵 LUCRO LÍQUIDO: R$ {hoje_lucro:.2f}")
     else: col2.error(f"💸 PREJUÍZO: R$ {hoje_lucro:.2f}")
 
-    # Gráfico Donut
     labels = ['Lucro (Inclui Bônus)', 'Guardar', 'Combustível']
     values = [max(0, hoje_lucro), hoje_total_guardar, hoje_comb]
     fig = go.Figure(data=[go.Pie(labels=labels, values=values, hole=.5, textinfo='percent', textposition='inside', marker=dict(colors=['#28a745', '#dc3545', '#ffc107'], line=dict(color='#000000', width=1)))])
@@ -205,6 +236,36 @@ if menu_escolha == "📝 Lançamento Diário":
                 st.cache_data.clear()
             else: st.error("Erro ao apagar.")
 
+# --- NOVA TELA: EXTRATO COMPLETO ---
+elif menu_escolha == "📋 Extrato Completo (Novo)":
+    st.title("📋 Extrato de Lançamentos")
+    st.markdown("Aqui você vê linha por linha o que está na planilha. Use para achar erros ou duplicidades.")
+    
+    df = carregar_dados()
+    if not df.empty:
+        # Mostra a tabela com opção de ordenação
+        st.dataframe(df.sort_values('Data', ascending=False), width="stretch", column_config={
+            "Ganhos": st.column_config.NumberColumn(format="R$ %.2f"),
+            "Bonus": st.column_config.NumberColumn(format="R$ %.2f"),
+            "Gastos_Combustivel": st.column_config.NumberColumn(format="R$ %.2f"),
+            "Km_Rodado": st.column_config.NumberColumn(format="%.1f km")
+        })
+        
+        st.markdown("### 🗑️ Excluir Lançamento Específico")
+        col_del1, col_del2 = st.columns([1, 2])
+        id_para_excluir = col_del1.number_input("Digite o ID (número da primeira coluna)", min_value=0, step=1)
+        if col_del2.button("Apagar Linha com este ID"):
+            if id_para_excluir > 0:
+                with st.spinner("Apagando..."):
+                    if excluir_linha_pelo_id(id_para_excluir):
+                        st.success(f"Linha {id_para_excluir} apagada!")
+                        st.cache_data.clear()
+                        st.rerun()
+            else:
+                st.warning("Digite um ID válido.")
+    else:
+        st.info("Nenhum dado encontrado.")
+
 # --- RELATÓRIOS ---
 else:
     df = carregar_dados()
@@ -220,16 +281,8 @@ else:
             df['Chave'] = pd.to_datetime(df['Data']).dt.strftime('%Y')
             titulo = "Anual"
 
-        # Agrupamento
-        resumo = df.groupby('Chave').agg({
-            'Ganhos': 'sum', 
-            'Bonus': 'sum', 
-            'Gastos_Combustivel': 'sum', 
-            'Km_Rodado': 'sum', 
-            'Data': 'nunique'
-        }).rename(columns={'Data': 'Dias'}).reset_index().sort_values('Chave', ascending=False)
+        resumo = df.groupby('Chave').agg({'Ganhos': 'sum', 'Bonus': 'sum', 'Gastos_Combustivel': 'sum', 'Km_Rodado': 'sum', 'Data': 'nunique'}).rename(columns={'Data': 'Dias'}).reset_index().sort_values('Chave', ascending=False)
         
-        # Cálculos
         resumo['Receita_Total'] = resumo['Ganhos'] + resumo['Bonus']
         resumo['IPVA_Seguro_Guardado'] = resumo['Dias'] * custo_fixo_dia
         resumo['Manutencao_Guardada'] = resumo['Km_Rodado'] * val_manut
@@ -237,8 +290,6 @@ else:
         resumo['Lucro_Liquido'] = resumo['Receita_Total'] - resumo['Gastos_Combustivel'] - resumo['IPVA_Seguro_Guardado'] - resumo['Manutencao_Guardada'] - resumo['Depreciacao_Guardada']
 
         st.title(f"Relatório {titulo}")
-        
-        # CONFIGURAÇÃO DE COLUNAS (AQUI ESTÁ A CORREÇÃO DE FORMATAÇÃO)
         st.dataframe(resumo, hide_index=True, width="stretch", column_config={
             "Receita_Total": st.column_config.NumberColumn("💰 Total (Ganhos+Bônus)", format="R$ %.2f"),
             "Ganhos": st.column_config.NumberColumn("🚗 Corridas", format="R$ %.2f"),
