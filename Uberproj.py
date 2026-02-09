@@ -43,15 +43,12 @@ def carregar_dados():
         if df.empty:
             return pd.DataFrame(columns=['Data', 'Ganhos', 'Bonus', 'Km_Rodado', 'Gastos_Combustivel', 'Obs'])
         
-        # Garante que a coluna Bonus existe (para dados antigos)
-        if 'Bonus' not in df.columns:
-            df['Bonus'] = 0.0
+        if 'Bonus' not in df.columns: df['Bonus'] = 0.0
 
         df['Data'] = pd.to_datetime(df['Data']).dt.date
         
         cols_num = ['Ganhos', 'Bonus', 'Km_Rodado', 'Gastos_Combustivel']
         for col in cols_num:
-            # Garante que a coluna existe antes de tentar converter
             if col in df.columns:
                 df[col] = df[col].astype(str).str.replace(',', '.').replace('', '0')
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
@@ -64,10 +61,8 @@ def salvar_na_nuvem(nova_linha_df):
     try:
         sheet = conectar_gsheets()
         nova_linha_df['Data'] = nova_linha_df['Data'].astype(str)
-        # Garante a ordem correta das colunas para bater com a planilha
         ordem_colunas = ['Data', 'Ganhos', 'Bonus', 'Km_Rodado', 'Gastos_Combustivel', 'Obs']
         nova_linha_df = nova_linha_df[ordem_colunas]
-        
         lista_dados = nova_linha_df.values.tolist()
         sheet.append_row(lista_dados[0])
         return True
@@ -103,13 +98,14 @@ def carregar_config():
         st.session_state['config_user'] = padrao
     return st.session_state['config_user']
 
-# --- ESTILO GRÁFICO ---
+# --- ESTILO GRÁFICO (MELHORADO) ---
 def estilo_grafico(fig, titulo_eixo_y):
-    fig.update_traces(texttemplate='R$ %{y:,.2f}', textposition='outside', marker_cornerradius=10)
+    # Removemos o "R$" do texto fixo para limpar o visual, deixando apenas o número formatado
+    fig.update_traces(texttemplate='%{y:,.2f}', textposition='outside', marker_cornerradius=10)
     fig.update_layout(title_x=0.5, title_font_size=18, yaxis_title=titulo_eixo_y, xaxis_title=None,
         xaxis=dict(type='category', showgrid=False, showline=False),
         yaxis=dict(showgrid=True, gridcolor='#444444', zerolinecolor='#444444', showline=False),
-        plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', margin=dict(t=60, b=30, l=60, r=20), showlegend=False)
+        plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', margin=dict(t=60, b=30, l=20, r=20), showlegend=False)
     return fig
 
 MESES_PT = {'Jan': 'Jan', 'Feb': 'Fev', 'Mar': 'Mar', 'Apr': 'Abr', 'May': 'Mai', 'Jun': 'Jun', 'Jul': 'Jul', 'Aug': 'Ago', 'Sep': 'Set', 'Oct': 'Out', 'Nov': 'Nov', 'Dec': 'Dez'}
@@ -168,7 +164,6 @@ st.sidebar.info(f"Meta Fixa Diária: R$ {custo_fixo_dia:.2f}\nPerda Diária (Dep
 if menu_escolha == "📝 Lançamento Diário":
     st.title("🚗 Controle Diário (Google Sheets)")
     
-    # Agora com 4 colunas para caber o Bônus
     c1, c2, c3, c4 = st.columns(4)
     hoje_ganho = c1.number_input("Ganhos Corridas (R$)", value=0.0, step=10.0, format="%.2f")
     hoje_bonus = c2.number_input("Bônus/Promo (R$)", value=0.0, step=10.0, format="%.2f", help="Dinheiro extra do app (Missão, Quest, etc)")
@@ -178,51 +173,40 @@ if menu_escolha == "📝 Lançamento Diário":
 
     hoje_manutencao = hoje_km * val_manut
     hoje_total_guardar = hoje_manutencao + custo_fixo_dia + depreciacao_dia
-    
-    # Lucro conta o ganho da corrida + o bônus
     hoje_lucro = (hoje_ganho + hoje_bonus) - hoje_total_guardar - hoje_comb
 
     st.markdown("---")
     col1, col2 = st.columns(2)
     col1.error(f"🚨 GUARDAR: R$ {hoje_total_guardar:.2f}")
-    
     if hoje_lucro > 0: col2.success(f"💵 LUCRO LÍQUIDO: R$ {hoje_lucro:.2f}")
     else: col2.error(f"💸 PREJUÍZO: R$ {hoje_lucro:.2f}")
 
-    # Gráfico
+    # Gráfico Donut (MELHORADO)
     labels = ['Lucro (Inclui Bônus)', 'Guardar', 'Combustível']
     values = [max(0, hoje_lucro), hoje_total_guardar, hoje_comb]
-    fig = go.Figure(data=[go.Pie(labels=labels, values=values, hole=.4, marker=dict(colors=['#28a745', '#dc3545', '#ffc107']))])
-    fig.update_layout(height=300, margin=dict(t=10, b=0, l=0, r=0))
+    # textposition='auto' e textinfo='percent' evitam cortes e mostram só %
+    fig = go.Figure(data=[go.Pie(labels=labels, values=values, hole=.5, textinfo='percent', textposition='auto', marker=dict(colors=['#28a745', '#dc3545', '#ffc107'], line=dict(color='#000000', width=1)))])
+    # Aumentei a altura e as margens, e movi a legenda para baixo
+    fig.update_layout(height=350, margin=dict(t=30, b=10, l=10, r=10), legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
     st.plotly_chart(fig, width="stretch")
 
     st.markdown("---")
     col_save, col_undo = st.columns([3, 1])
-    
     if col_save.button("💾 Salvar no Google Sheets", type="primary", use_container_width=True):
         if (hoje_ganho > 0 or hoje_bonus > 0):
             with st.spinner("Salvando..."):
-                novo = pd.DataFrame([{
-                    'Data': date.today(), 
-                    'Ganhos': hoje_ganho, 
-                    'Bonus': hoje_bonus,
-                    'Km_Rodado': hoje_km, 
-                    'Gastos_Combustivel': hoje_comb, 
-                    'Obs': obs
-                }])
+                novo = pd.DataFrame([{'Data': date.today(), 'Ganhos': hoje_ganho, 'Bonus': hoje_bonus, 'Km_Rodado': hoje_km, 'Gastos_Combustivel': hoje_comb, 'Obs': obs}])
                 if salvar_na_nuvem(novo):
                     st.success("Salvo com sucesso!")
                     st.cache_data.clear()
-        else:
-            st.warning("Preencha algum valor.")
+        else: st.warning("Preencha algum valor.")
             
     if col_undo.button("↩️ Desfazer Último", use_container_width=True):
         with st.spinner("Apagando..."):
             if desfazer_ultimo_lancamento():
                 st.toast("Apagado!", icon="🗑️")
                 st.cache_data.clear()
-            else:
-                st.error("Erro ao apagar.")
+            else: st.error("Erro ao apagar.")
 
 # --- RELATÓRIOS ---
 else:
@@ -239,16 +223,8 @@ else:
             df['Chave'] = pd.to_datetime(df['Data']).dt.strftime('%Y')
             titulo = "Anual"
 
-        # Agrupa (Agora somando Bonus também)
-        resumo = df.groupby('Chave').agg({
-            'Ganhos': 'sum', 
-            'Bonus': 'sum',
-            'Gastos_Combustivel': 'sum', 
-            'Km_Rodado': 'sum', 
-            'Data': 'nunique'
-        }).rename(columns={'Data': 'Dias'}).reset_index().sort_values('Chave', ascending=False)
+        resumo = df.groupby('Chave').agg({'Ganhos': 'sum', 'Bonus': 'sum', 'Gastos_Combustivel': 'sum', 'Km_Rodado': 'sum', 'Data': 'nunique'}).rename(columns={'Data': 'Dias'}).reset_index().sort_values('Chave', ascending=False)
         
-        # Cálculos Finais
         resumo['Receita_Total'] = resumo['Ganhos'] + resumo['Bonus']
         resumo['IPVA_Seguro_Guardado'] = resumo['Dias'] * custo_fixo_dia
         resumo['Manutencao_Guardada'] = resumo['Km_Rodado'] * val_manut
@@ -266,7 +242,6 @@ else:
         t1, t2, t3 = st.tabs(["Faturamento vs Bônus", "Lucro", "Custos"])
         
         with t1: 
-            # Gráfico empilhado (Corridas + Bônus)
             fig_fat = px.bar(resumo, x='Chave', y=['Ganhos', 'Bonus'], title="Composição da Receita", barmode='stack', color_discrete_map={'Ganhos': '#00CC96', 'Bonus': '#636EFA'})
             st.plotly_chart(estilo_grafico(fig_fat, "R$"), width="stretch")
             
