@@ -12,14 +12,13 @@ import urllib3
 st.set_page_config(page_title="Gestão Uber Pro", layout="wide")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- LISTA DE MARCAS OFFLINE (SEGURANÇA) ---
-# Se a internet falhar, isso garante que o menu apareça.
-MARCAS_OFFLINE = {
+# --- LISTA DE MARCAS OFFLINE (GARANTE QUE O MENU SEMPRE APAREÇA) ---
+MARCAS_FIXAS = {
     "Chevrolet": 23, "Fiat": 21, "Volkswagen": 59, "Ford": 22, 
     "Hyundai": 25, "Toyota": 56, "Honda": 20, "Renault": 44, 
     "Nissan": 43, "Jeep": 29, "Caoa Chery": 136, "Citroën": 11,
-    "Peugeot": 41, "Mitsubishi": 40, "BYD": 176, "BMW": 7,
-    "Mercedes-Benz": 39, "Audi": 6, "Kia": 31
+    "Peugeot": 41, "Mitsubishi": 40, "BMW": 7, "Mercedes-Benz": 39, 
+    "Audi": 6, "Kia": 31, "BYD": 176
 }
 
 # --- CONEXÃO COM GOOGLE SHEETS ---
@@ -63,12 +62,16 @@ def carregar_config_nuvem():
         sheet = conectar_gsheets("Config")
         dados = sheet.get_all_values()
         config_dict = {}
-        for linha in dados[1:]:
-            if len(linha) >= 2:
-                chave = linha[0]
-                valor = linha[1]
-                try: config_dict[chave] = float(valor)
-                except: config_dict[chave] = valor
+        # Se a planilha estiver vazia (só cabeçalho), usa padrão
+        if len(dados) <= 1:
+            pass 
+        else:
+            for linha in dados[1:]:
+                if len(linha) >= 2:
+                    chave = linha[0]
+                    valor = linha[1]
+                    try: config_dict[chave] = float(valor)
+                    except: config_dict[chave] = valor
         
         padrao = {
             "valor_carro": 83000.0, "custo_fixo_anual": 6300.0, "dias_trabalho_mes": 4.0,
@@ -132,7 +135,6 @@ def carregar_dados():
         if len(dados) < 2: return pd.DataFrame(columns=['Data', 'Ganhos', 'Bonus', 'Km_Rodado', 'Gastos_Combustivel', 'Obs'])
         cabecalho = dados[0]
         df = pd.DataFrame(dados[1:], columns=cabecalho)
-        # Garante colunas
         cols_nec = ['Data', 'Ganhos', 'Bonus', 'Km_Rodado', 'Gastos_Combustivel', 'Obs']
         for c in cols_nec: 
             if c not in df.columns: df[c] = "0"
@@ -147,10 +149,8 @@ def salvar_na_nuvem(nova_linha_df):
     try:
         sheet = conectar_gsheets("Dados")
         nova_linha_df['Data'] = nova_linha_df['Data'].astype(str)
-        # Força ordem
         ordem = ['Data', 'Ganhos', 'Bonus', 'Km_Rodado', 'Gastos_Combustivel', 'Obs']
         nova_linha_df = nova_linha_df[ordem]
-        # Formata BR
         for col in ['Ganhos', 'Bonus', 'Km_Rodado', 'Gastos_Combustivel']:
             val = nova_linha_df.iloc[0][col]
             if isinstance(val, (int, float)):
@@ -174,7 +174,7 @@ def desfazer_ultimo_lancamento():
 headers = {'User-Agent': 'Mozilla/5.0'}
 def get_json(url):
     try:
-        response = requests.get(url, headers=headers, timeout=4, verify=False)
+        response = requests.get(url, headers=headers, timeout=5, verify=False)
         if response.status_code == 200: return response.json()
     except: pass
     return None
@@ -199,88 +199,83 @@ menu_escolha = st.sidebar.radio("Ir para:", ["📝 Lançamento Diário", "📋 E
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Custos & Calculadora")
 
-# --- FIPE BLINDADA (TRY/EXCEPT) ---
+# --- FIPE COM LISTA FIXA (SOLUÇÃO DO PROBLEMA) ---
 with st.sidebar.expander("🚘 Meu Carro (FIPE)", expanded=True):
-    try:
-        # Carrega dados salvos
-        m_id = limpar_id_fipe(config.get('fipe_marca_id'))
-        mod_id = limpar_id_fipe(config.get('fipe_modelo_id'))
-        a_id = limpar_id_fipe(config.get('fipe_ano_id'))
-        
-        # Botão de Atualizar (Só aparece se tiver carro salvo)
-        if m_id and mod_id and a_id:
-            st.success(f"Carro: **{config.get('fipe_nome_carro', 'Salvo')}**")
-            if st.button("🔄 Atualizar Valor Hoje"):
-                with st.spinner("Buscando..."):
-                    url = f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{m_id}/modelos/{mod_id}/anos/{a_id}"
-                    dados = get_json(url)
-                    if dados:
-                        v_str = dados['Valor']
-                        novo_v = float(v_str.replace("R$ ", "").replace(".", "").replace(",", "."))
-                        config['valor_carro'] = novo_v
-                        st.session_state['config_user']['valor_carro'] = novo_v
-                        salvar_config_nuvem(st.session_state['config_user'])
-                        st.success(f"Atualizado: {v_str}")
-                        st.rerun()
-                    else: st.error("Erro FIPE. Tente mais tarde.")
+    # Carrega dados salvos
+    m_id = limpar_id_fipe(config.get('fipe_marca_id'))
+    mod_id = limpar_id_fipe(config.get('fipe_modelo_id'))
+    a_id = limpar_id_fipe(config.get('fipe_ano_id'))
+    
+    if m_id and mod_id and a_id:
+        st.success(f"Salvo: **{config.get('fipe_nome_carro', 'Seu Carro')}**")
+        if st.button("🔄 Atualizar Preço FIPE"):
+            with st.spinner("Buscando..."):
+                url = f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{m_id}/modelos/{mod_id}/anos/{a_id}"
+                dados = get_json(url)
+                if dados:
+                    v_str = dados['Valor']
+                    novo_v = float(v_str.replace("R$ ", "").replace(".", "").replace(",", "."))
+                    config['valor_carro'] = novo_v
+                    st.session_state['config_user']['valor_carro'] = novo_v
+                    salvar_config_nuvem(st.session_state['config_user'])
+                    st.success(f"Atualizado: {v_str}")
+                    st.rerun()
+                else: st.error("Erro FIPE. Tente mais tarde.")
 
-        st.markdown("---")
-        st.markdown("**Definir/Trocar Carro:**")
+    st.markdown("---")
+    st.markdown("**Definir/Trocar Carro:**")
+    
+    # 1. SELEÇÃO DE MARCA (USA LISTA FIXA - SEMPRE APARECE)
+    lista_marcas = sorted(list(MARCAS_FIXAS.keys()))
+    try: idx_chev = lista_marcas.index("Chevrolet")
+    except: idx_chev = 0
+    
+    marca_selecionada = st.selectbox("1. Selecione a Marca", lista_marcas, index=idx_chev)
+    
+    if marca_selecionada:
+        cod_marca = MARCAS_FIXAS[marca_selecionada]
         
-        # 1. SELEÇÃO DE MARCA (Usa lista offline para garantir que apareça)
-        # Ordena as marcas offline para ficar bonito
-        lista_marcas = sorted(list(MARCAS_OFFLINE.keys()))
-        marca_selecionada = st.selectbox("Marca", lista_marcas)
+        # 2. SELEÇÃO DE MODELO (Busca na API)
+        modelos_data = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos")
         
-        if marca_selecionada:
-            cod_marca = MARCAS_OFFLINE[marca_selecionada]
+        if modelos_data:
+            modelos_dict = {m['nome']: m['codigo'] for m in modelos_data['modelos']}
+            modelo_sel = st.selectbox("2. Selecione o Modelo", list(modelos_dict.keys()))
             
-            # 2. SELEÇÃO DE MODELO (Precisa da API)
-            modelos_data = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos")
-            
-            if modelos_data:
-                modelos_dict = {m['nome']: m['codigo'] for m in modelos_data['modelos']}
-                modelo_sel = st.selectbox("Modelo", list(modelos_dict.keys()))
+            if modelo_sel:
+                cod_modelo = modelos_dict[modelo_sel]
                 
-                if modelo_sel:
-                    cod_modelo = modelos_dict[modelo_sel]
+                # 3. SELEÇÃO DE ANO
+                anos_data = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos/{cod_modelo}/anos")
+                
+                if anos_data:
+                    anos_dict = {a['nome']: a['codigo'] for a in anos_data}
+                    ano_sel = st.selectbox("3. Selecione o Ano", list(anos_dict.keys()))
                     
-                    # 3. SELEÇÃO DE ANO
-                    anos_data = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos/{cod_modelo}/anos")
-                    
-                    if anos_data:
-                        anos_dict = {a['nome']: a['codigo'] for a in anos_data}
-                        ano_sel = st.selectbox("Ano", list(anos_dict.keys()))
+                    if st.button("💾 Salvar Carro Como Padrão"):
+                        cod_ano = anos_dict[ano_sel]
+                        dados_finais = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos/{cod_modelo}/anos/{cod_ano}")
                         
-                        if st.button("💾 Salvar como Padrão"):
-                            cod_ano = anos_dict[ano_sel]
-                            # Pega valor final para confirmar
-                            dados_finais = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos/{cod_modelo}/anos/{cod_ano}")
+                        if dados_finais:
+                            v_str = dados_finais['Valor']
+                            v_limpo = float(v_str.replace("R$ ", "").replace(".", "").replace(",", "."))
                             
-                            if dados_finais:
-                                v_str = dados_finais['Valor']
-                                v_limpo = float(v_str.replace("R$ ", "").replace(".", "").replace(",", "."))
-                                
-                                # Salva tudo na sessão e nuvem
-                                st.session_state['config_user'].update({
-                                    'valor_carro': v_limpo,
-                                    'fipe_marca_id': cod_marca,
-                                    'fipe_modelo_id': cod_modelo,
-                                    'fipe_ano_id': cod_ano,
-                                    'fipe_nome_carro': f"{marca_selecionada} {modelo_sel} {ano_sel}"
-                                })
-                                salvar_config_nuvem(st.session_state['config_user'])
-                                st.success(f"Salvo! Valor: {v_str}")
-                                st.rerun()
-                            else: st.error("Erro ao buscar valor final.")
-                    else: st.warning("Carregando anos...")
-            else:
-                st.error("⚠️ Sem conexão com FIPE para buscar modelos. Tente mais tarde.")
+                            st.session_state['config_user'].update({
+                                'valor_carro': v_limpo,
+                                'fipe_marca_id': cod_marca,
+                                'fipe_modelo_id': cod_modelo,
+                                'fipe_ano_id': cod_ano,
+                                'fipe_nome_carro': f"{marca_selecionada} {modelo_sel} {ano_sel}"
+                            })
+                            salvar_config_nuvem(st.session_state['config_user'])
+                            st.success(f"Salvo! Valor: {v_str}")
+                            st.rerun()
+                        else: st.error("Erro ao buscar valor final.")
+                else: st.info("Carregando anos...")
+        else:
+            st.warning(f"Não foi possível carregar modelos da {marca_selecionada}. API FIPE instável.")
 
-    except Exception as e:
-        st.error(f"Erro na área FIPE: {e}")
-
-# --- INPUTS FINANCEIROS ---
+# --- INPUTS ---
 val_carro = st.sidebar.number_input("Valor Veículo (R$)", value=float(config.get('valor_carro', 83000)), format="%.2f")
 val_fixo = st.sidebar.number_input("IPVA+Seguro Anual (R$)", value=float(config.get('custo_fixo_anual', 6300)), format="%.2f")
 dias_mes = st.sidebar.number_input("Dias trab/mês", min_value=1, max_value=31, value=int(float(config.get('dias_trabalho_mes', 4))))
