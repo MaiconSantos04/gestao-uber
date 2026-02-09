@@ -32,19 +32,21 @@ def conectar_gsheets():
         st.error("⚠️ Planilha 'GestaoUberDB' não encontrada.")
         st.stop()
 
-# --- FUNÇÃO DE LIMPEZA INTELIGENTE (RESOLVE O ERRO DOS VALORES) ---
+# --- FUNÇÃO DE LIMPEZA INTELIGENTE (CORRIGIDA) ---
 def limpar_valor_brasileiro(valor):
     if isinstance(valor, (int, float)):
         return float(valor)
     
-    valor_str = str(valor).strip()
-    # Remove R$ e espaços
-    valor_str = valor_str.replace('R$', '').replace(' ', '')
+    valor_str = str(valor).strip().replace('R$', '').replace(' ', '')
     
-    # Lógica Brasileira:
-    # Se tem vírgula, assume que é decimal (ex: 1.200,50 -> tira ponto, troca virgula por ponto)
+    # Lógica Híbrida Inteligente:
+    # 1. Se tem vírgula, assumimos formato BR (1.000,00 ou 69,14)
     if ',' in valor_str:
-        valor_str = valor_str.replace('.', '').replace(',', '.')
+        valor_str = valor_str.replace('.', '') # Tira ponto de milhar
+        valor_str = valor_str.replace(',', '.') # Troca vírgula por ponto decimal
+    
+    # 2. Se NÃO tem vírgula, mas tem ponto, assumimos formato Python (69.14)
+    # O código anterior apagava esse ponto, gerando o erro. Agora mantemos.
     
     try:
         return float(valor_str)
@@ -63,15 +65,14 @@ def carregar_dados():
         
         if 'Bonus' not in df.columns: df['Bonus'] = 0.0
 
-        # Adiciona índice visual (ID) para ajudar a excluir
-        df['ID'] = df.index + 2 # +2 porque linha 1 é cabeçalho no Sheets
+        # Cria ID baseado no índice + 2 (conta cabeçalho do Excel)
+        df['ID'] = df.index + 2 
 
         df['Data'] = pd.to_datetime(df['Data']).dt.date
         
         cols_num = ['Ganhos', 'Bonus', 'Km_Rodado', 'Gastos_Combustivel']
         for col in cols_num:
             if col in df.columns:
-                # Aplica a limpeza inteligente em cada valor
                 df[col] = df[col].apply(limpar_valor_brasileiro)
             
         return df
@@ -193,7 +194,7 @@ st.sidebar.info(f"Meta Fixa Diária: R$ {custo_fixo_dia:.2f}\nPerda Diária (Dep
 if menu_escolha == "📝 Lançamento Diário":
     st.title("🚗 Controle Diário (Google Sheets)")
     
-    st.info("💡 Dica: Ao digitar valores, use vírgula para centavos (ex: 69,14).")
+    st.info("💡 Dica: O sistema agora aceita tanto ponto (69.14) quanto vírgula (69,14).")
     
     c1, c2, c3, c4 = st.columns(4)
     hoje_ganho = c1.number_input("Ganhos Corridas (R$)", value=0.0, step=10.0, format="%.2f")
@@ -236,15 +237,15 @@ if menu_escolha == "📝 Lançamento Diário":
                 st.cache_data.clear()
             else: st.error("Erro ao apagar.")
 
-# --- NOVA TELA: EXTRATO COMPLETO ---
+# --- TELA 2: EXTRATO COMPLETO ---
 elif menu_escolha == "📋 Extrato Completo (Novo)":
     st.title("📋 Extrato de Lançamentos")
-    st.markdown("Aqui você vê linha por linha o que está na planilha. Use para achar erros ou duplicidades.")
+    st.warning("⚠️ Se houver valores errados (ex: 6914 em vez de 69.14), apague-os aqui pelo ID.")
     
     df = carregar_dados()
     if not df.empty:
-        # Mostra a tabela com opção de ordenação
         st.dataframe(df.sort_values('Data', ascending=False), width="stretch", column_config={
+            "ID": st.column_config.NumberColumn("ID (Use para apagar)", format="%d"),
             "Ganhos": st.column_config.NumberColumn(format="R$ %.2f"),
             "Bonus": st.column_config.NumberColumn(format="R$ %.2f"),
             "Gastos_Combustivel": st.column_config.NumberColumn(format="R$ %.2f"),
@@ -253,16 +254,16 @@ elif menu_escolha == "📋 Extrato Completo (Novo)":
         
         st.markdown("### 🗑️ Excluir Lançamento Específico")
         col_del1, col_del2 = st.columns([1, 2])
-        id_para_excluir = col_del1.number_input("Digite o ID (número da primeira coluna)", min_value=0, step=1)
+        id_para_excluir = col_del1.number_input("Digite o ID para apagar:", min_value=0, step=1)
         if col_del2.button("Apagar Linha com este ID"):
-            if id_para_excluir > 0:
+            if id_para_excluir > 1: # Protege cabeçalho
                 with st.spinner("Apagando..."):
                     if excluir_linha_pelo_id(id_para_excluir):
                         st.success(f"Linha {id_para_excluir} apagada!")
                         st.cache_data.clear()
                         st.rerun()
             else:
-                st.warning("Digite um ID válido.")
+                st.warning("ID inválido.")
     else:
         st.info("Nenhum dado encontrado.")
 
@@ -291,23 +292,21 @@ else:
 
         st.title(f"Relatório {titulo}")
         st.dataframe(resumo, hide_index=True, width="stretch", column_config={
-            "Receita_Total": st.column_config.NumberColumn("💰 Total (Ganhos+Bônus)", format="R$ %.2f"),
+            "Receita_Total": st.column_config.NumberColumn("💰 Total", format="R$ %.2f"),
             "Ganhos": st.column_config.NumberColumn("🚗 Corridas", format="R$ %.2f"),
             "Bonus": st.column_config.NumberColumn("🎁 Bônus", format="R$ %.2f"),
             "Gastos_Combustivel": st.column_config.NumberColumn("⛽ Combustível", format="R$ %.2f"),
-            "Km_Rodado": st.column_config.NumberColumn("🛣️ KM Rodado", format="%.1f km"),
-            "IPVA_Seguro_Guardado": st.column_config.NumberColumn("🏦 IPVA/Seguro", format="R$ %.2f"),
-            "Manutencao_Guardada": st.column_config.NumberColumn("🛠️ Manutenção", format="R$ %.2f"),
-            "Depreciacao_Guardada": st.column_config.NumberColumn("📉 Depreciação", format="R$ %.2f"),
-            "Lucro_Liquido": st.column_config.NumberColumn("💵 Lucro Líquido", format="R$ %.2f")
+            "Km_Rodado": st.column_config.NumberColumn("🛣️ KM", format="%.1f km"),
+            "IPVA_Seguro_Guardado": st.column_config.NumberColumn("🏦 IPVA", format="R$ %.2f"),
+            "Manutencao_Guardada": st.column_config.NumberColumn("🛠️ Manut", format="R$ %.2f"),
+            "Depreciacao_Guardada": st.column_config.NumberColumn("📉 Deprec", format="R$ %.2f"),
+            "Lucro_Liquido": st.column_config.NumberColumn("💵 Lucro", format="R$ %.2f")
         })
 
         t1, t2, t3 = st.tabs(["Faturamento vs Bônus", "Lucro", "Custos"])
-        
         with t1: 
             fig_fat = px.bar(resumo, x='Chave', y=['Ganhos', 'Bonus'], title="Composição da Receita", barmode='stack', color_discrete_map={'Ganhos': '#00CC96', 'Bonus': '#636EFA'})
             st.plotly_chart(estilo_grafico(fig_fat, "R$"), width="stretch")
-            
         with t2: st.plotly_chart(estilo_grafico(px.bar(resumo, x='Chave', y='Lucro_Liquido', color_discrete_sequence=['#28a745']), "R$"), width="stretch")
         with t3: st.plotly_chart(estilo_grafico(px.bar(resumo, x='Chave', y=['IPVA_Seguro_Guardado', 'Manutencao_Guardada'], barmode='group'), "R$"), width="stretch")
     else:
