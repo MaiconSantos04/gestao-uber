@@ -4,6 +4,7 @@ import requests
 import plotly.graph_objects as go
 import plotly.express as px
 from datetime import date
+import time
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import urllib3
@@ -12,14 +13,19 @@ import urllib3
 st.set_page_config(page_title="Gestão Uber Pro", layout="wide")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- LISTA FIXA DE MARCAS (OFFLINE) ---
-MARCAS_FIXAS = {
-    "Chevrolet": 23, "Fiat": 21, "Volkswagen": 59, "Ford": 22, 
-    "Hyundai": 25, "Toyota": 56, "Honda": 20, "Renault": 44, 
-    "Nissan": 43, "Jeep": 29, "Caoa Chery": 136, "Citroën": 11,
-    "Peugeot": 41, "Mitsubishi": 40, "BMW": 7, "Mercedes-Benz": 39, 
-    "Audi": 6, "Kia": 31, "BYD": 176
-}
+# --- LISTA FIXA DE MARCAS (ÚLTIMO RECURSO) ---
+MARCAS_OFFLINE = [
+    {"nome": "Chevrolet", "codigo": "23"}, {"nome": "Fiat", "codigo": "21"},
+    {"nome": "Volkswagen", "codigo": "59"}, {"nome": "Ford", "codigo": "22"},
+    {"nome": "Hyundai", "codigo": "25"}, {"nome": "Toyota", "codigo": "56"},
+    {"nome": "Honda", "codigo": "20"}, {"nome": "Renault", "codigo": "44"},
+    {"nome": "Nissan", "codigo": "43"}, {"nome": "Jeep", "codigo": "29"},
+    {"nome": "Caoa Chery", "codigo": "136"}, {"nome": "Citroën", "codigo": "11"},
+    {"nome": "Peugeot", "codigo": "41"}, {"nome": "Mitsubishi", "codigo": "40"},
+    {"nome": "BMW", "codigo": "7"}, {"nome": "Mercedes-Benz", "codigo": "39"},
+    {"nome": "Audi", "codigo": "6"}, {"nome": "Kia", "codigo": "31"},
+    {"nome": "BYD", "codigo": "176"}
+]
 
 # --- CONEXÃO COM GOOGLE SHEETS ---
 def conectar_gsheets(nome_aba="Dados"):
@@ -166,11 +172,39 @@ def desfazer_ultimo_lancamento():
         sheet = conectar_gsheets("Dados"); sheet.delete_rows(len(sheet.get_all_values())); return True
     except: return False
 
-# --- API FIPE ---
+# --- API FIPE MULTI-FONTE (A SOLUÇÃO DE OURO) ---
 headers = {'User-Agent': 'Mozilla/5.0'}
+
+def buscar_marcas_blindado():
+    """Tenta várias APIs até conseguir a lista de marcas"""
+    
+    # 1. Tentativa: Parallelum (Padrão)
+    try:
+        resp = requests.get("https://parallelum.com.br/fipe/api/v1/carros/marcas", headers=headers, timeout=3, verify=False)
+        if resp.status_code == 200: return resp.json()
+    except: pass
+    
+    # 2. Tentativa: Brasil API (Fallback Rápido)
+    try:
+        resp = requests.get("https://brasilapi.com.br/api/fipe/marcas/v1/carros", headers=headers, timeout=3, verify=False)
+        if resp.status_code == 200:
+            # Brasil API usa 'valor' em vez de 'codigo', precisamos adaptar
+            dados = resp.json()
+            return [{"nome": d["nome"], "codigo": d["valor"]} for d in dados]
+    except: pass
+
+    # 3. Tentativa: FipeAPI (Outro Backup)
+    try:
+        resp = requests.get("https://fipeapi.com.br/api/v1/carros/marcas", headers=headers, timeout=3, verify=False)
+        if resp.status_code == 200: return resp.json()
+    except: pass
+
+    # 4. Falha Total: Usa lista Offline
+    return MARCAS_OFFLINE
+
 def get_json(url):
     try:
-        response = requests.get(url, headers=headers, timeout=5, verify=False)
+        response = requests.get(url, headers=headers, timeout=8, verify=False)
         if response.status_code == 200: return response.json()
     except: pass
     return None
@@ -195,61 +229,71 @@ menu_escolha = st.sidebar.radio("Ir para:", ["📝 Lançamento Diário", "📋 E
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Configurações do Carro")
 
-# --- ÁREA FIPE COM ABAS (MELHORIA DE UI) ---
-# Mostra o carro atual no topo, independente do método
+# --- ÁREA FIPE COM ABAS ---
 st.sidebar.info(f"🚗 Atual: **{config.get('fipe_nome_carro', 'Não definido')}**\n\n💰 Valor: **R$ {config.get('valor_carro', 0):,.2f}**")
 
-# Cria abas para separar os métodos
 tab_auto, tab_manual = st.sidebar.tabs(["🔍 FIPE Automática", "✍️ Cadastro Manual"])
 
-# --- ABA 1: AUTOMÁTICA ---
+# --- ABA 1: AUTOMÁTICA (COM MULTI-FONTE) ---
 with tab_auto:
-    # 1. MARCA
-    lista_marcas = sorted(list(MARCAS_FIXAS.keys()))
-    marca_selecionada = st.selectbox("Marca", lista_marcas, key="sb_marca")
+    # 1. MARCA (Usa a função blindada que busca em 3 lugares)
+    marcas_data = buscar_marcas_blindado()
     
-    if marca_selecionada:
-        cod_marca = MARCAS_FIXAS[marca_selecionada]
+    if marcas_data:
+        marcas_dict = {m['nome']: m['codigo'] for m in marcas_data}
+        # Ordena alfabeticamente
+        lista_marcas = sorted(list(marcas_dict.keys()))
         
-        # 2. MODELO
-        modelos_data = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos")
-        
-        if modelos_data:
-            modelos_dict = {m['nome']: m['codigo'] for m in modelos_data['modelos']}
-            modelo_sel = st.selectbox("Modelo", list(modelos_dict.keys()), key="sb_modelo")
+        # Tenta deixar Chevrolet pré-selecionado se não tiver nada
+        idx_padrao = 0
+        if "Chevrolet" in lista_marcas: idx_padrao = lista_marcas.index("Chevrolet")
             
-            if modelo_sel:
-                cod_modelo = modelos_dict[modelo_sel]
+        marca_selecionada = st.selectbox("Marca", lista_marcas, index=idx_padrao, key="sb_marca")
+    
+        if marca_selecionada:
+            cod_marca = marcas_dict[marca_selecionada]
+            
+            # 2. MODELO
+            modelos_data = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos")
+            
+            if modelos_data:
+                modelos_dict = {m['nome']: m['codigo'] for m in modelos_data['modelos']}
+                modelo_sel = st.selectbox("Modelo", list(modelos_dict.keys()), key="sb_modelo")
                 
-                # 3. ANO
-                anos_data = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos/{cod_modelo}/anos")
-                
-                if anos_data:
-                    anos_dict = {a['nome']: a['codigo'] for a in anos_data}
-                    ano_sel = st.selectbox("Ano", list(anos_dict.keys()), key="sb_ano")
+                if modelo_sel:
+                    cod_modelo = modelos_dict[modelo_sel]
                     
-                    if st.button("💾 Buscar e Salvar (FIPE)"):
-                        cod_ano = anos_dict[ano_sel]
-                        dados_finais = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos/{cod_modelo}/anos/{cod_ano}")
+                    # 3. ANO
+                    anos_data = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos/{cod_modelo}/anos")
+                    
+                    if anos_data:
+                        anos_dict = {a['nome']: a['codigo'] for a in anos_data}
+                        ano_sel = st.selectbox("Ano", list(anos_dict.keys()), key="sb_ano")
                         
-                        if dados_finais:
-                            v_str = dados_finais['Valor']
-                            v_limpo = float(v_str.replace("R$ ", "").replace(".", "").replace(",", "."))
+                        if st.button("💾 Buscar e Salvar (FIPE)"):
+                            cod_ano = anos_dict[ano_sel]
+                            dados_finais = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos/{cod_modelo}/anos/{cod_ano}")
                             
-                            st.session_state['config_user'].update({
-                                'valor_carro': v_limpo,
-                                'fipe_marca_id': cod_marca,
-                                'fipe_modelo_id': cod_modelo,
-                                'fipe_ano_id': cod_ano,
-                                'fipe_nome_carro': f"{marca_selecionada} {modelo_sel} {ano_sel}"
-                            })
-                            salvar_config_nuvem(st.session_state['config_user'])
-                            st.success(f"Atualizado: {v_str}")
-                            st.rerun()
-                        else: st.error("Erro ao buscar valor final.")
-                else: st.info("Carregando anos...")
-        else:
-            st.warning("⚠️ API FIPE instável. Use a aba 'Cadastro Manual'.")
+                            if dados_finais:
+                                v_str = dados_finais['Valor']
+                                v_limpo = float(v_str.replace("R$ ", "").replace(".", "").replace(",", "."))
+                                
+                                st.session_state['config_user'].update({
+                                    'valor_carro': v_limpo,
+                                    'fipe_marca_id': cod_marca,
+                                    'fipe_modelo_id': cod_modelo,
+                                    'fipe_ano_id': cod_ano,
+                                    'fipe_nome_carro': f"{marca_selecionada} {modelo_sel} {ano_sel}"
+                                })
+                                salvar_config_nuvem(st.session_state['config_user'])
+                                st.success(f"Atualizado: {v_str}")
+                                st.rerun()
+                            else: st.error("Erro ao buscar valor final.")
+                    else: st.info("Carregando anos...")
+            else:
+                st.warning("⚠️ Falha ao buscar modelos. Use a aba 'Cadastro Manual'.")
+    else:
+        st.error("Erro fatal nas APIs de Marcas. Use o Manual.")
 
 # --- ABA 2: MANUAL ---
 with tab_manual:
@@ -261,7 +305,7 @@ with tab_manual:
         st.session_state['config_user'].update({
             'valor_carro': valor_manual,
             'fipe_nome_carro': nome_manual,
-            'fipe_marca_id': "", 'fipe_modelo_id': "", 'fipe_ano_id': "" # Limpa IDs da automática
+            'fipe_marca_id': "", 'fipe_modelo_id': "", 'fipe_ano_id': ""
         })
         salvar_config_nuvem(st.session_state['config_user'])
         st.success("Dados manuais salvos!")
@@ -271,7 +315,7 @@ st.sidebar.markdown("---")
 
 # --- INPUTS ---
 st.sidebar.header("⚙️ Custos Operacionais")
-val_carro = float(config.get('valor_carro', 83000)) # Apenas exibe/usa para conta, edição é nas abas acima
+val_carro = float(config.get('valor_carro', 83000))
 val_fixo = st.sidebar.number_input("IPVA+Seguro Anual (R$)", value=float(config.get('custo_fixo_anual', 6300)), format="%.2f")
 dias_mes = st.sidebar.number_input("Dias trab/mês", min_value=1, max_value=31, value=int(float(config.get('dias_trabalho_mes', 4))))
 
@@ -361,7 +405,7 @@ else:
             df['Chave'] = df['Data'].astype(str).apply(lambda x: f"Semana {pd.to_datetime(x).strftime('%U/%Y')}")
             titulo = "Semanal"
         elif menu_escolha == "📅 Relatório Mensal":
-            df['Chave'] = pd.to_datetime(df['Data']).dt.strftime('%b').map(MESES_PT) + '/' + pd.to_datetime(df['Data']).dt.strftime('%Y')
+            df['Mes_PT'] = pd.to_datetime(df['Data']).dt.strftime('%b').map(MESES_PT) + '/' + pd.to_datetime(df['Data']).dt.strftime('%Y')
             titulo = "Mensal"
         else:
             df['Chave'] = pd.to_datetime(df['Data']).dt.strftime('%Y')
