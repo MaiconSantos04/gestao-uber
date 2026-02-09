@@ -32,66 +32,37 @@ def conectar_gsheets():
         st.error("⚠️ Planilha 'GestaoUberDB' não encontrada.")
         st.stop()
 
-# --- LIMPEZA DE DADOS (CORREÇÃO DO ERRO X100) ---
+# --- LIMPEZA DE DADOS (HÍBRIDA) ---
 def limpar_valor_hibrido(valor):
-    # Se já for número, retorna direto (evita o erro do ponto ser removido)
-    if isinstance(valor, (int, float)):
-        return float(valor)
-    
+    if isinstance(valor, (int, float)): return float(valor)
     val_str = str(valor).strip().replace('R$', '').replace(' ', '')
-    
-    # Se tiver PONTO e NÃO tiver vírgula, assume que já é formato internacional (69.14)
     if '.' in val_str and ',' not in val_str:
-        try:
-            return float(val_str)
-        except:
-            pass # Se falhar, tenta o método BR abaixo
-            
-    # Formato Brasileiro (1.000,00 -> 1000.00)
+        try: return float(val_str)
+        except: pass
     if ',' in val_str:
-        val_str = val_str.replace('.', '') # Remove ponto de milhar
-        val_str = val_str.replace(',', '.') # Troca vírgula por ponto
-        
-    try:
-        return float(val_str)
-    except:
-        return 0.0
+        val_str = val_str.replace('.', '').replace(',', '.')
+    try: return float(val_str)
+    except: return 0.0
 
 # --- FUNÇÕES DE DADOS ---
 def carregar_dados():
     try:
         sheet = conectar_gsheets()
-        # Pega valores crus (raw) para evitar confusão de formatação
         dados = sheet.get_all_values()
-        
-        # Se só tiver o cabeçalho ou estiver vazia
         if len(dados) < 2:
             return pd.DataFrame(columns=['Data', 'Ganhos', 'Bonus', 'Km_Rodado', 'Gastos_Combustivel', 'Obs'])
-            
-        # Cria DataFrame usando a primeira linha como cabeçalho
         cabecalho = dados[0]
         linhas = dados[1:]
         df = pd.DataFrame(linhas, columns=cabecalho)
-        
-        # Garante colunas mínimas
         colunas_padrao = ['Data', 'Ganhos', 'Bonus', 'Km_Rodado', 'Gastos_Combustivel', 'Obs']
         for col in colunas_padrao:
-            if col not in df.columns:
-                df[col] = "0"
-
-        # Cria ID visual (Linha do Excel = Index + 2)
+            if col not in df.columns: df[col] = "0"
         df['ID'] = df.index + 2 
-
         df['Data'] = pd.to_datetime(df['Data'], errors='coerce').dt.date
-        
-        # Aplica a limpeza corrigida
         cols_num = ['Ganhos', 'Bonus', 'Km_Rodado', 'Gastos_Combustivel']
-        for col in cols_num:
-            df[col] = df[col].apply(limpar_valor_hibrido)
-            
+        for col in cols_num: df[col] = df[col].apply(limpar_valor_hibrido)
         return df
-    except Exception as e:
-        st.error(f"Erro ao carregar: {e}")
+    except:
         return pd.DataFrame(columns=['Data', 'Ganhos', 'Bonus', 'Km_Rodado', 'Gastos_Combustivel', 'Obs'])
 
 def salvar_na_nuvem(nova_linha_df):
@@ -99,23 +70,15 @@ def salvar_na_nuvem(nova_linha_df):
         sheet = conectar_gsheets()
         nova_linha_df['Data'] = nova_linha_df['Data'].astype(str)
         ordem_colunas = ['Data', 'Ganhos', 'Bonus', 'Km_Rodado', 'Gastos_Combustivel', 'Obs']
-        
-        # Garante que o DataFrame tem todas as colunas
         for col in ordem_colunas:
-            if col not in nova_linha_df.columns:
-                nova_linha_df[col] = ""
-                
+            if col not in nova_linha_df.columns: nova_linha_df[col] = ""
         nova_linha_df = nova_linha_df[ordem_colunas]
-        
-        # Formata para Brasileiro antes de enviar (Vírgula)
         cols_valores = ['Ganhos', 'Bonus', 'Km_Rodado', 'Gastos_Combustivel']
         for col in cols_valores:
             val = nova_linha_df.iloc[0][col]
             if isinstance(val, (int, float)):
                 nova_linha_df.at[0, col] = f"{val:.2f}".replace('.', ',')
-
-        lista_dados = nova_linha_df.values.tolist()
-        sheet.append_row(lista_dados[0])
+        sheet.append_row(nova_linha_df.values.tolist()[0])
         return True
     except Exception as e:
         st.error(f"Erro ao salvar: {e}")
@@ -138,22 +101,17 @@ def desfazer_ultimo_lancamento():
             sheet.delete_rows(len(todas_linhas))
             return True
         return False
-    except Exception as e:
-        st.error(f"Erro ao excluir: {e}")
-        return False
+    except: return False
 
-# --- API FIPE ---
-headers = {'User-Agent': 'Mozilla/5.0'}
-def get_json(url):
-    try:
-        response = requests.get(url, headers=headers, timeout=5)
-        if response.status_code == 200: return response.json()
-    except: pass
-    return None
-
-# --- CONFIGURAÇÃO ---
+# --- CONFIGURAÇÃO (LÓGICA NOVA POR KM) ---
 def carregar_config():
-    padrao = {"valor_carro": 83000.0, "custo_fixo_anual": 6300.0, "custo_pneu_oleo": 0.20, "depreciacao_pct": 12.5}
+    # Padrões solicitados: Manut 0.25 e Deprec 0.40
+    padrao = {
+        "custo_fixo_anual": 6300.0, 
+        "dias_trabalho_semana": 5,
+        "custo_manut_km": 0.25, 
+        "custo_deprec_km": 0.40
+    }
     if 'config_user' not in st.session_state:
         st.session_state['config_user'] = padrao
     return st.session_state['config_user']
@@ -177,46 +135,32 @@ st.sidebar.title("Navegação")
 menu_escolha = st.sidebar.radio("Ir para:", ["📝 Lançamento Diário", "📋 Extrato Completo", "📅 Relatório Semanal", "📅 Relatório Mensal", "📅 Relatório Anual"])
 
 st.sidebar.markdown("---")
-st.sidebar.header("⚙️ Configurações")
+st.sidebar.header("⚙️ Custos & Metas")
 
-with st.sidebar.expander("🔍 Atualizar Valor FIPE"):
-    marcas_data = get_json("https://parallelum.com.br/fipe/api/v1/carros/marcas")
-    if marcas_data:
-        marcas_dict = {m['nome']: m['codigo'] for m in marcas_data}
-        idx_marca = list(marcas_dict.keys()).index("Chevrolet") if "Chevrolet" in marcas_dict else 0
-        marca_nome = st.selectbox("Marca", list(marcas_dict.keys()), index=idx_marca)
-        if marca_nome:
-            cod_marca = marcas_dict[marca_nome]
-            modelos_data = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos")
-            if modelos_data:
-                modelos_dict = {m['nome']: m['codigo'] for m in modelos_data['modelos']}
-                modelo_nome = st.selectbox("Modelo", list(modelos_dict.keys()))
-                if modelo_nome:
-                    cod_modelo = modelos_dict[modelo_nome]
-                    anos_data = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos/{cod_modelo}/anos")
-                    if anos_data:
-                        anos_dict = {a['nome']: a['codigo'] for a in anos_data}
-                        ano_nome = st.selectbox("Ano", list(anos_dict.keys()))
-                        if st.button("Aplicar Valor FIPE"):
-                            cod_ano = anos_dict[ano_nome]
-                            valor_final = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos/{cod_modelo}/anos/{cod_ano}")
-                            if valor_final:
-                                valor_str = valor_final['Valor']
-                                valor_limpo = float(valor_str.replace("R$ ", "").replace(".", "").replace(",", "."))
-                                st.session_state['config_user']['valor_carro'] = valor_limpo
-                                st.success(f"Atualizado: {valor_str}")
-                                st.rerun()
+# 1. IPVA e SEGURO (Custo Fixo)
+with st.sidebar.expander("🏦 IPVA e Seguro (Anual)", expanded=True):
+    val_fixo = st.number_input("Valor Total Anual (R$)", value=config['custo_fixo_anual'], format="%.2f")
+    dias_semana = st.slider("Trabalho quantos dias na semana?", 1, 7, value=config['dias_trabalho_semana'])
+    
+    # Cálculo Inteligente: Se não trabalha todo dia, a meta diária aumenta para compensar as folgas
+    dias_trabalhados_ano = dias_semana * 52
+    custo_fixo_dia = val_fixo / dias_trabalhados_ano
+    st.caption(f"📅 Você trabalha aprox. **{dias_trabalhados_ano} dias/ano**.")
+    st.info(f"Meta Diária IPVA: **R$ {custo_fixo_dia:.2f}** (Só nos dias trabalhados)")
 
-st.sidebar.markdown("---")
-val_carro = st.sidebar.number_input("Valor Veículo (R$)", value=st.session_state['config_user']['valor_carro'], format="%.2f")
-val_fixo = st.sidebar.number_input("Custo Fixo Anual", value=config['custo_fixo_anual'], format="%.2f")
-val_manut = st.sidebar.number_input("Custo Manut/KM", value=config['custo_pneu_oleo'], format="%.2f")
-val_deprec = st.sidebar.slider("Depreciação %", 0.0, 20.0, value=config['depreciacao_pct'])
+# 2. MANUTENÇÃO E DEPRECIAÇÃO (Custo por KM)
+with st.sidebar.expander("🚗 Custos por KM (Variável)", expanded=True):
+    val_manut = st.number_input("Manutenção por KM (R$)", value=config['custo_manut_km'], format="%.2f", step=0.05)
+    val_deprec = st.number_input("Depreciação por KM (R$)", value=config['custo_deprec_km'], format="%.2f", step=0.05)
+    st.caption("Valores sugeridos: Manut R$ 0,25 | Deprec R$ 0,40")
 
-st.session_state['config_user'] = {"valor_carro": val_carro, "custo_fixo_anual": val_fixo, "custo_pneu_oleo": val_manut, "depreciacao_pct": val_deprec}
-custo_fixo_dia = val_fixo / 365
-depreciacao_dia = (val_carro * (val_deprec / 100)) / 365
-st.sidebar.info(f"Meta Fixa Diária: R$ {custo_fixo_dia:.2f}\nPerda Diária (Deprec): R$ {depreciacao_dia:.2f}")
+# Atualiza Sessão
+st.session_state['config_user'] = {
+    "custo_fixo_anual": val_fixo, 
+    "dias_trabalho_semana": dias_semana,
+    "custo_manut_km": val_manut, 
+    "custo_deprec_km": val_deprec
+}
 
 # --- TELA 1: LANÇAMENTO ---
 if menu_escolha == "📝 Lançamento Diário":
@@ -229,18 +173,33 @@ if menu_escolha == "📝 Lançamento Diário":
     hoje_comb = c4.number_input("Combustível (R$)", value=0.0, step=5.0, format="%.2f")
     obs = st.text_input("Observação")
 
+    # NOVOS CÁLCULOS BASEADOS NO KM
     hoje_manutencao = hoje_km * val_manut
-    hoje_total_guardar = hoje_manutencao + custo_fixo_dia + depreciacao_dia
+    hoje_depreciacao = hoje_km * val_deprec
+    
+    # IPVA é fixo por dia trabalhado
+    hoje_ipva = custo_fixo_dia
+    
+    hoje_total_guardar = hoje_manutencao + hoje_depreciacao + hoje_ipva
     hoje_lucro = (hoje_ganho + hoje_bonus) - hoje_total_guardar - hoje_comb
 
     st.markdown("---")
-    col1, col2 = st.columns(2)
-    col1.error(f"🚨 GUARDAR: R$ {hoje_total_guardar:.2f}")
-    if hoje_lucro > 0: col2.success(f"💵 LUCRO LÍQUIDO: R$ {hoje_lucro:.2f}")
-    else: col2.error(f"💸 PREJUÍZO: R$ {hoje_lucro:.2f}")
+    
+    # Cartões de Resumo
+    kpi1, kpi2, kpi3 = st.columns(3)
+    kpi1.error(f"🚨 GUARDAR: R$ {hoje_total_guardar:.2f}")
+    if hoje_lucro > 0: kpi2.success(f"💵 LUCRO LÍQUIDO: R$ {hoje_lucro:.2f}")
+    else: kpi2.error(f"💸 PREJUÍZO: R$ {hoje_lucro:.2f}")
+    kpi3.metric("Custo KM Rodado", f"R$ {(val_manut + val_deprec):.2f}/km")
 
-    # Gráfico Donut
-    labels = ['Lucro (Inclui Bônus)', 'Guardar', 'Combustível']
+    # Detalhamento para o usuário entender
+    with st.expander("🔎 Ver detalhe do cálculo de hoje"):
+        st.write(f"**IPVA/Seguro (Dia de Trabalho):** R$ {hoje_ipva:.2f}")
+        st.write(f"**Manutenção ({hoje_km}km x {val_manut}):** R$ {hoje_manutencao:.2f}")
+        st.write(f"**Depreciação ({hoje_km}km x {val_deprec}):** R$ {hoje_depreciacao:.2f}")
+
+    # Gráfico
+    labels = ['Lucro (Inclui Bônus)', 'Guardar (Manut+Deprec+IPVA)', 'Combustível']
     values = [max(0, hoje_lucro), hoje_total_guardar, hoje_comb]
     fig = go.Figure(data=[go.Pie(labels=labels, values=values, hole=.5, textinfo='percent', textposition='inside', marker=dict(colors=['#28a745', '#dc3545', '#ffc107'], line=dict(color='#000000', width=1)))])
     fig.update_layout(height=350, margin=dict(t=30, b=10, l=10, r=10), legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
@@ -251,11 +210,14 @@ if menu_escolha == "📝 Lançamento Diário":
     
     if col_save.button("💾 Salvar no Google Sheets", type="primary", use_container_width=True):
         if (hoje_ganho > 0 or hoje_bonus > 0):
-            with st.spinner("Salvando..."):
-                novo = pd.DataFrame([{'Data': date.today(), 'Ganhos': hoje_ganho, 'Bonus': hoje_bonus, 'Km_Rodado': hoje_km, 'Gastos_Combustivel': hoje_comb, 'Obs': obs}])
-                if salvar_na_nuvem(novo):
-                    st.success("Salvo com sucesso!")
-                    st.cache_data.clear() # Limpa o cache para mostrar o valor certo
+            if hoje_comb > 800 or hoje_km > 2000:
+                st.error(f"⚠️ Valor suspeito (R$ {hoje_comb} ou {hoje_km} km). Verifique vírgulas.")
+            else:
+                with st.spinner("Salvando..."):
+                    novo = pd.DataFrame([{'Data': date.today(), 'Ganhos': hoje_ganho, 'Bonus': hoje_bonus, 'Km_Rodado': hoje_km, 'Gastos_Combustivel': hoje_comb, 'Obs': obs}])
+                    if salvar_na_nuvem(novo):
+                        st.success("Salvo com sucesso!")
+                        st.cache_data.clear()
         else: st.warning("Preencha algum valor.")
             
     if col_undo.button("↩️ Desfazer Último", use_container_width=True):
@@ -268,7 +230,6 @@ if menu_escolha == "📝 Lançamento Diário":
 # --- TELA 2: EXTRATO COMPLETO ---
 elif menu_escolha == "📋 Extrato Completo":
     st.title("📋 Extrato de Lançamentos")
-    
     df = carregar_dados()
     if not df.empty:
         st.dataframe(df.sort_values('Data', ascending=False), width="stretch", column_config={
@@ -278,8 +239,6 @@ elif menu_escolha == "📋 Extrato Completo":
             "Gastos_Combustivel": st.column_config.NumberColumn(format="R$ %.2f"),
             "Km_Rodado": st.column_config.NumberColumn(format="%.1f km")
         })
-        
-        st.markdown("### 🗑️ Apagar Lançamento")
         col_del1, col_del2 = st.columns([1, 2])
         id_para_excluir = col_del1.number_input("Digite o ID para apagar:", min_value=0, step=1)
         if col_del2.button("❌ Apagar Linha"):
@@ -289,10 +248,8 @@ elif menu_escolha == "📋 Extrato Completo":
                         st.success(f"Linha {id_para_excluir} apagada!")
                         st.cache_data.clear()
                         st.rerun()
-            else:
-                st.warning("ID inválido.")
-    else:
-        st.info("Nenhum dado encontrado.")
+            else: st.warning("ID inválido.")
+    else: st.info("Nenhum dado encontrado.")
 
 # --- RELATÓRIOS ---
 else:
@@ -311,10 +268,16 @@ else:
 
         resumo = df.groupby('Chave').agg({'Ganhos': 'sum', 'Bonus': 'sum', 'Gastos_Combustivel': 'sum', 'Km_Rodado': 'sum', 'Data': 'nunique'}).rename(columns={'Data': 'Dias'}).reset_index().sort_values('Chave', ascending=False)
         
+        # CÁLCULOS FINAIS NOS RELATÓRIOS (USANDO A NOVA LÓGICA DE KM)
         resumo['Receita_Total'] = resumo['Ganhos'] + resumo['Bonus']
+        
+        # IPVA: Dias trabalhados * Custo Dia Ajustado
         resumo['IPVA_Seguro_Guardado'] = resumo['Dias'] * custo_fixo_dia
+        
+        # Manutenção e Depreciação agora são baseados puramente no KM
         resumo['Manutencao_Guardada'] = resumo['Km_Rodado'] * val_manut
-        resumo['Depreciacao_Guardada'] = resumo['Dias'] * depreciacao_dia
+        resumo['Depreciacao_Guardada'] = resumo['Km_Rodado'] * val_deprec
+        
         resumo['Lucro_Liquido'] = resumo['Receita_Total'] - resumo['Gastos_Combustivel'] - resumo['IPVA_Seguro_Guardado'] - resumo['Manutencao_Guardada'] - resumo['Depreciacao_Guardada']
 
         st.title(f"Relatório {titulo}")
@@ -322,7 +285,7 @@ else:
             "Receita_Total": st.column_config.NumberColumn("💰 Total", format="R$ %.2f"),
             "Ganhos": st.column_config.NumberColumn("🚗 Corridas", format="R$ %.2f"),
             "Bonus": st.column_config.NumberColumn("🎁 Bônus", format="R$ %.2f"),
-            "Gastos_Combustivel": st.column_config.NumberColumn("⛽ Combustível", format="R$ %.2f"),
+            "Gastos_Combustivel": st.column_config.NumberColumn("⛽ Gasolina", format="R$ %.2f"),
             "Km_Rodado": st.column_config.NumberColumn("🛣️ KM", format="%.1f km"),
             "IPVA_Seguro_Guardado": st.column_config.NumberColumn("🏦 IPVA", format="R$ %.2f"),
             "Manutencao_Guardada": st.column_config.NumberColumn("🛠️ Manut", format="R$ %.2f"),
@@ -335,6 +298,6 @@ else:
             fig_fat = px.bar(resumo, x='Chave', y=['Ganhos', 'Bonus'], title="Composição da Receita", barmode='stack', color_discrete_map={'Ganhos': '#00CC96', 'Bonus': '#636EFA'})
             st.plotly_chart(estilo_grafico(fig_fat, "R$"), width="stretch")
         with t2: st.plotly_chart(estilo_grafico(px.bar(resumo, x='Chave', y='Lucro_Liquido', color_discrete_sequence=['#28a745']), "R$"), width="stretch")
-        with t3: st.plotly_chart(estilo_grafico(px.bar(resumo, x='Chave', y=['IPVA_Seguro_Guardado', 'Manutencao_Guardada'], barmode='group'), "R$"), width="stretch")
+        with t3: st.plotly_chart(estilo_grafico(px.bar(resumo, x='Chave', y=['IPVA_Seguro_Guardado', 'Manutencao_Guardada', 'Depreciacao_Guardada'], barmode='group'), "R$"), width="stretch")
     else:
         st.info("Nenhum dado na planilha.")
