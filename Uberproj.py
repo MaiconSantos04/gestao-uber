@@ -8,7 +8,7 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import urllib3
 
-# Desativa avisos de SSL inseguro (Necessário para API da FIPE em alguns servidores)
+# Desativa avisos de SSL (Necessário para API da FIPE)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
@@ -96,7 +96,7 @@ def salvar_config_nuvem(nova_config):
         st.error(f"Erro ao salvar config: {e}")
         return False
 
-# --- FUNÇÃO DE LIMPEZA FIPE ---
+# --- FUNÇÕES DE LIMPEZA ---
 def limpar_id_fipe(valor):
     if not valor: return None
     valor_str = str(valor).strip()
@@ -105,7 +105,6 @@ def limpar_id_fipe(valor):
     try: return str(int(float(valor_str)))
     except: return valor_str
 
-# --- LIMPEZA DE DADOS FINANCEIROS ---
 def limpar_valor_hibrido(valor):
     if isinstance(valor, (int, float)): return float(valor)
     val_str = str(valor).strip().replace('R$', '').replace(' ', '')
@@ -174,13 +173,20 @@ def desfazer_ultimo_lancamento():
         return False
     except: return False
 
-# --- API FIPE (FORÇA BRUTA) ---
+# --- API FIPE (COM FALLBACK OFFLINE) ---
 headers = {'User-Agent': 'Mozilla/5.0'}
+
+# Lista de segurança caso a API falhe
+MARCAS_COMUNS = {
+    "Chevrolet": 23, "Fiat": 21, "Volkswagen": 59, "Ford": 22, 
+    "Hyundai": 25, "Toyota": 56, "Honda": 20, "Renault": 44, 
+    "Nissan": 43, "Jeep": 29, "Caoa Chery": 136, "Citroën": 11,
+    "Peugeot": 41, "Mitsubishi": 40
+}
+
 def get_json(url):
     try:
-        # verify=False pula verificação de SSL (resolve erros de conexão em nuvem)
-        # timeout=10 espera mais tempo pela resposta
-        response = requests.get(url, headers=headers, timeout=10, verify=False)
+        response = requests.get(url, headers=headers, timeout=5, verify=False)
         if response.status_code == 200: return response.json()
     except: pass
     return None
@@ -210,8 +216,9 @@ menu_escolha = st.sidebar.radio("Ir para:", ["📝 Lançamento Diário", "📋 E
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Custos & Calculadora")
 
-# --- FIPE COM SISTEMA DE RESGATE ---
+# --- FIPE ---
 with st.sidebar.expander("🚘 Meu Carro (FIPE)", expanded=True):
+    # Tenta obter dados salvos
     m_id = limpar_id_fipe(config.get('fipe_marca_id'))
     mod_id = limpar_id_fipe(config.get('fipe_modelo_id'))
     a_id = limpar_id_fipe(config.get('fipe_ano_id'))
@@ -231,59 +238,80 @@ with st.sidebar.expander("🚘 Meu Carro (FIPE)", expanded=True):
                     st.success(f"Atualizado: {valor_str}")
                     st.rerun()
                 else:
-                    st.error("Erro na FIPE. Se persistir, recadastre o carro.")
+                    st.error("Erro na FIPE. O sistema pode estar instável.")
     else:
         st.info("Cadastre seu carro para atualizar o valor automaticamente.")
 
     st.markdown("---")
     st.markdown("**Definir/Trocar Carro:**")
     
-    # Tenta carregar marcas
+    # 1. Busca Marcas (Tenta Online -> Se falhar, usa Offline)
     marcas_data = get_json("https://parallelum.com.br/fipe/api/v1/carros/marcas")
     
     if marcas_data:
+        # Modo Online
         marcas_dict = {m['nome']: m['codigo'] for m in marcas_data}
-        idx_marca = list(marcas_dict.keys()).index("Chevrolet") if "Chevrolet" in marcas_dict else 0
-        marca_nome = st.selectbox("Marca", list(marcas_dict.keys()), index=idx_marca)
-        
-        if marca_nome:
-            cod_marca = marcas_dict[marca_nome]
-            modelos_data = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos")
-            if modelos_data:
-                modelos_dict = {m['nome']: m['codigo'] for m in modelos_data['modelos']}
-                modelo_nome = st.selectbox("Modelo", list(modelos_dict.keys()))
-                
-                if modelo_nome:
-                    cod_modelo = modelos_dict[modelo_nome]
-                    anos_data = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos/{cod_modelo}/anos")
-                    if anos_data:
-                        anos_dict = {a['nome']: a['codigo'] for a in anos_data}
-                        ano_nome = st.selectbox("Ano", list(anos_dict.keys()))
-                        
-                        if st.button("💾 Salvar Carro como Padrão"):
-                            cod_ano = anos_dict[ano_nome]
-                            valor_final = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos/{cod_modelo}/anos/{cod_ano}")
-                            if valor_final:
-                                valor_str = valor_final['Valor']
-                                valor_limpo = float(valor_str.replace("R$ ", "").replace(".", "").replace(",", "."))
-                                st.session_state['config_user']['valor_carro'] = valor_limpo
-                                st.session_state['config_user']['fipe_marca_id'] = cod_marca
-                                st.session_state['config_user']['fipe_modelo_id'] = cod_modelo
-                                st.session_state['config_user']['fipe_ano_id'] = cod_ano
-                                st.session_state['config_user']['fipe_nome_carro'] = f"{marca_nome} {modelo_nome} {ano_nome}"
-                                st.success(f"Carro salvo! Valor: {valor_str}. Salve abaixo.")
     else:
-        st.error("⚠️ Falha ao carregar lista de marcas.")
-        if st.button("🔄 Tentar Conexão Novamente"):
-            st.rerun()
+        # Modo Offline (Fallback de Segurança)
+        # st.caption("⚠️ Usando lista offline (FIPE instável)")
+        marcas_dict = MARCAS_COMUNS
 
-# --- INPUTS (COM MÉTODO 2) ---
+    # Ordena marcas para facilitar
+    marcas_ordenadas = sorted(list(marcas_dict.keys()))
+    try:
+        idx_marca = marcas_ordenadas.index("Chevrolet")
+    except:
+        idx_marca = 0
+        
+    marca_nome = st.selectbox("Marca", marcas_ordenadas, index=idx_marca)
+    
+    if marca_nome:
+        cod_marca = marcas_dict[marca_nome]
+        
+        # 2. Busca Modelos (Precisa da API, se falhar avisa)
+        modelos_data = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos")
+        
+        if modelos_data:
+            modelos_dict = {m['nome']: m['codigo'] for m in modelos_data['modelos']}
+            modelo_nome = st.selectbox("Modelo", list(modelos_dict.keys()))
+            
+            if modelo_nome:
+                cod_modelo = modelos_dict[modelo_nome]
+                # 3. Busca Anos
+                anos_data = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos/{cod_modelo}/anos")
+                
+                if anos_data:
+                    anos_dict = {a['nome']: a['codigo'] for a in anos_data}
+                    ano_nome = st.selectbox("Ano", list(anos_dict.keys()))
+                    
+                    if st.button("💾 Salvar Carro como Padrão"):
+                        cod_ano = anos_dict[ano_nome]
+                        valor_final = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos/{cod_modelo}/anos/{cod_ano}")
+                        if valor_final:
+                            valor_str = valor_final['Valor']
+                            valor_limpo = float(valor_str.replace("R$ ", "").replace(".", "").replace(",", "."))
+                            
+                            # Salva Configuração
+                            st.session_state['config_user']['valor_carro'] = valor_limpo
+                            st.session_state['config_user']['fipe_marca_id'] = cod_marca
+                            st.session_state['config_user']['fipe_modelo_id'] = cod_modelo
+                            st.session_state['config_user']['fipe_ano_id'] = cod_ano
+                            st.session_state['config_user']['fipe_nome_carro'] = f"{marca_nome} {modelo_nome} {ano_nome}"
+                            
+                            st.success(f"Salvo! Valor: {valor_str}. Salve abaixo.")
+                else:
+                    st.warning("Carregando anos...")
+        else:
+            if marca_nome: 
+                st.warning("⚠️ Erro ao buscar modelos. A FIPE pode estar fora do ar. Tente mais tarde.")
+
+# --- INPUTS ---
 val_carro = st.sidebar.number_input("Valor Veículo (R$)", value=float(config.get('valor_carro', 83000)), format="%.2f")
 val_fixo = st.sidebar.number_input("IPVA+Seguro Anual (R$)", value=float(config.get('custo_fixo_anual', 6300)), format="%.2f")
-dias_mes = st.sidebar.number_input("Dias trabalhados por MÊS", min_value=1, max_value=31, value=int(float(config.get('dias_trabalho_mes', 4))), help="Ex: Se roda fim de semana sim/não, coloque 4 dias.")
+dias_mes = st.sidebar.number_input("Dias trabalhados por MÊS", min_value=1, max_value=31, value=int(float(config.get('dias_trabalho_mes', 4))), help="Ex: 4 dias/mês")
 
 with st.sidebar.expander("⛽ Combustível e Rodagem", expanded=True):
-    media_km_dia = st.number_input("Média KM por dia", value=float(config.get('media_km_dia', 150)), help="Usado para dividir o custo fixo por KM")
+    media_km_dia = st.number_input("Média KM por dia", value=float(config.get('media_km_dia', 150)))
     consumo_carro = st.number_input("Consumo (Km/L)", value=float(config.get('consumo_carro', 10)), format="%.1f")
     preco_gasolina = st.number_input("Preço Gasolina (R$)", value=float(config.get('preco_gasolina', 5.89)), format="%.2f")
 
@@ -301,7 +329,7 @@ custo_km_total = custo_fixo_km + custo_gas_km + val_manut + val_deprec
 st.sidebar.markdown("---")
 st.sidebar.markdown("### ⛔ STOP LOSS (Mínimo)")
 st.sidebar.metric("Aceitar acima de:", f"R$ {custo_km_total:.2f} / km")
-st.sidebar.caption(f"Meta IPVA/Seguro Diária: **R$ {custo_fixo_dia:.2f}** (Baseado em {dias_mes} dias/mês)")
+st.sidebar.caption(f"Meta IPVA/Seguro Diária: **R$ {custo_fixo_dia:.2f}**")
 
 if st.sidebar.button("💾 Salvar Parâmetros (Nuvem)"):
     config_atual = st.session_state['config_user']
