@@ -32,7 +32,7 @@ def conectar_gsheets(nome_aba="Dados"):
             return sheet
         except:
             if nome_aba == "Config":
-                sheet = spreadsheet.add_worksheet(title="Config", rows=20, cols=2)
+                sheet = spreadsheet.add_worksheet(title="Config", rows=30, cols=2)
                 sheet.append_row(["Parametro", "Valor"])
                 return sheet
             else:
@@ -61,7 +61,9 @@ def carregar_config_nuvem():
         padrao = {
             "valor_carro": 83000.0, "custo_fixo_anual": 6300.0, "dias_trabalho_semana": 5.0,
             "custo_manut_km": 0.25, "custo_deprec_km": 0.40, "media_km_dia": 150.0,
-            "consumo_carro": 10.0, "preco_gasolina": 5.80
+            "consumo_carro": 10.0, "preco_gasolina": 5.80,
+            # Campos novos para FIPE Automática
+            "fipe_marca_id": "", "fipe_modelo_id": "", "fipe_ano_id": "", "fipe_nome_carro": ""
         }
         
         config_final = {**padrao, **config_dict}
@@ -72,7 +74,8 @@ def carregar_config_nuvem():
         return {
             "valor_carro": 83000.0, "custo_fixo_anual": 6300.0, "dias_trabalho_semana": 5.0,
             "custo_manut_km": 0.25, "custo_deprec_km": 0.40, "media_km_dia": 150.0,
-            "consumo_carro": 10.0, "preco_gasolina": 5.80
+            "consumo_carro": 10.0, "preco_gasolina": 5.80,
+            "fipe_marca_id": "", "fipe_modelo_id": "", "fipe_ano_id": "", "fipe_nome_carro": ""
         }
 
 def salvar_config_nuvem(nova_config):
@@ -168,26 +171,18 @@ def get_json(url):
     except: pass
     return None
 
-# --- ESTILO GRÁFICO (COM TOOLTIP LIMPO E CORRIGIDO) ---
+# --- ESTILO GRÁFICO ---
 def estilo_grafico(fig, titulo_eixo_y):
     fig.update_traces(
         texttemplate='R$ %{y:,.2f}', 
         textposition='outside', 
         marker_cornerradius=10,
-        hovertemplate='<b>%{data.name}</b>: R$ %{y:,.2f}<extra></extra>' # Tooltip Limpo
+        hovertemplate='<b>%{data.name}</b>: R$ %{y:,.2f}<extra></extra>'
     )
-    fig.update_layout(
-        title_x=0.5, 
-        title_font_size=18, 
-        yaxis_title=titulo_eixo_y, 
-        xaxis_title=None,
+    fig.update_layout(title_x=0.5, title_font_size=18, yaxis_title=titulo_eixo_y, xaxis_title=None,
         xaxis=dict(type='category', showgrid=False, showline=False),
         yaxis=dict(showgrid=True, gridcolor='#444444', zerolinecolor='#444444', showline=False),
-        plot_bgcolor='rgba(0,0,0,0)', 
-        paper_bgcolor='rgba(0,0,0,0)', 
-        margin=dict(t=60, b=30, l=20, r=20), 
-        showlegend=False
-    )
+        plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', margin=dict(t=60, b=30, l=20, r=20), showlegend=False)
     return fig
 
 MESES_PT = {'Jan': 'Jan', 'Feb': 'Fev', 'Mar': 'Mar', 'Apr': 'Abr', 'May': 'Mai', 'Jun': 'Jun', 'Jul': 'Jul', 'Aug': 'Ago', 'Sep': 'Set', 'Oct': 'Out', 'Nov': 'Nov', 'Dec': 'Dez'}
@@ -202,11 +197,71 @@ menu_escolha = st.sidebar.radio("Ir para:", ["📝 Lançamento Diário", "📋 E
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Custos & Calculadora")
 
+# --- BLOCO FIPE INTELIGENTE ---
+with st.sidebar.expander("🚘 Meu Carro (FIPE)", expanded=True):
+    # 1. Se já tem carro salvo, mostra botão de atualizar direto
+    if config.get('fipe_marca_id') and config.get('fipe_modelo_id'):
+        st.success(f"Carro Salvo: **{config.get('fipe_nome_carro')}**")
+        if st.button("🔄 Atualizar Preço FIPE Agora"):
+            with st.spinner("Buscando valor atualizado na FIPE..."):
+                url = f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{config['fipe_marca_id']}/modelos/{config['fipe_modelo_id']}/anos/{config['fipe_ano_id']}"
+                dados_fipe = get_json(url)
+                if dados_fipe:
+                    valor_str = dados_fipe['Valor']
+                    novo_valor = float(valor_str.replace("R$ ", "").replace(".", "").replace(",", "."))
+                    # Atualiza sessão para salvar depois
+                    config['valor_carro'] = novo_valor
+                    st.session_state['config_user']['valor_carro'] = novo_valor
+                    st.success(f"Atualizado: {valor_str}")
+                    st.rerun()
+                else:
+                    st.error("Erro ao conectar na FIPE.")
+    else:
+        st.info("Selecione seu carro abaixo para salvar.")
+
+    # 2. Seletor para mudar de carro ou definir o primeiro
+    st.markdown("---")
+    st.markdown("**Definir/Trocar Carro:**")
+    marcas_data = get_json("https://parallelum.com.br/fipe/api/v1/carros/marcas")
+    if marcas_data:
+        marcas_dict = {m['nome']: m['codigo'] for m in marcas_data}
+        idx_marca = list(marcas_dict.keys()).index("Chevrolet") if "Chevrolet" in marcas_dict else 0
+        marca_nome = st.selectbox("Marca", list(marcas_dict.keys()), index=idx_marca)
+        
+        if marca_nome:
+            cod_marca = marcas_dict[marca_nome]
+            modelos_data = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos")
+            if modelos_data:
+                modelos_dict = {m['nome']: m['codigo'] for m in modelos_data['modelos']}
+                modelo_nome = st.selectbox("Modelo", list(modelos_dict.keys()))
+                
+                if modelo_nome:
+                    cod_modelo = modelos_dict[modelo_nome]
+                    anos_data = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos/{cod_modelo}/anos")
+                    if anos_data:
+                        anos_dict = {a['nome']: a['codigo'] for a in anos_data}
+                        ano_nome = st.selectbox("Ano", list(anos_dict.keys()))
+                        
+                        if st.button("💾 Salvar Carro como Padrão"):
+                            cod_ano = anos_dict[ano_nome]
+                            valor_final = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos/{cod_modelo}/anos/{cod_ano}")
+                            if valor_final:
+                                valor_str = valor_final['Valor']
+                                valor_limpo = float(valor_str.replace("R$ ", "").replace(".", "").replace(",", "."))
+                                
+                                # Salva TUDO na memória para ser enviado ao Google
+                                st.session_state['config_user']['valor_carro'] = valor_limpo
+                                st.session_state['config_user']['fipe_marca_id'] = cod_marca
+                                st.session_state['config_user']['fipe_modelo_id'] = cod_modelo
+                                st.session_state['config_user']['fipe_ano_id'] = cod_ano
+                                st.session_state['config_user']['fipe_nome_carro'] = f"{marca_nome} {modelo_nome} {ano_nome}"
+                                
+                                st.success(f"Carro salvo! Valor: {valor_str}. Clique em 'Salvar Parâmetros' abaixo para gravar na nuvem.")
+
 # Inputs de Configuração
-with st.sidebar.expander("📝 Parâmetros do Carro", expanded=False):
-    val_carro = st.number_input("Valor Veículo (R$)", value=float(config.get('valor_carro', 83000)), format="%.2f")
-    val_fixo = st.number_input("IPVA+Seguro Anual (R$)", value=float(config.get('custo_fixo_anual', 6300)), format="%.2f")
-    dias_semana = st.slider("Dias trab/semana", 1, 7, value=int(config.get('dias_trabalho_semana', 5)))
+val_carro = st.sidebar.number_input("Valor Veículo (R$)", value=float(config.get('valor_carro', 83000)), format="%.2f")
+val_fixo = st.sidebar.number_input("IPVA+Seguro Anual (R$)", value=float(config.get('custo_fixo_anual', 6300)), format="%.2f")
+dias_semana = st.sidebar.slider("Dias trab/semana", 1, 7, value=int(config.get('dias_trabalho_semana', 5)))
 
 with st.sidebar.expander("⛽ Combustível e Rodagem", expanded=True):
     media_km_dia = st.number_input("Média KM por dia", value=float(config.get('media_km_dia', 150)), help="Usado para dividir o custo fixo por KM")
@@ -228,15 +283,22 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### ⛔ STOP LOSS (Mínimo)")
 st.sidebar.metric("Aceitar acima de:", f"R$ {custo_km_total:.2f} / km")
 
-if st.sidebar.button("💾 Salvar Parâmetros"):
+if st.sidebar.button("💾 Salvar Parâmetros (Nuvem)"):
+    # Atualiza o dicionário com os inputs da tela, mas mantém os IDs da FIPE que já estavam na memória
+    config_atual = st.session_state['config_user']
     nova_config = {
         "valor_carro": val_carro, "custo_fixo_anual": val_fixo, "dias_trabalho_semana": dias_semana,
         "custo_manut_km": val_manut, "custo_deprec_km": val_deprec,
-        "media_km_dia": media_km_dia, "consumo_carro": consumo_carro, "preco_gasolina": preco_gasolina
+        "media_km_dia": media_km_dia, "consumo_carro": consumo_carro, "preco_gasolina": preco_gasolina,
+        # Mantém dados FIPE se existirem
+        "fipe_marca_id": config_atual.get("fipe_marca_id", ""),
+        "fipe_modelo_id": config_atual.get("fipe_modelo_id", ""),
+        "fipe_ano_id": config_atual.get("fipe_ano_id", ""),
+        "fipe_nome_carro": config_atual.get("fipe_nome_carro", "")
     }
     with st.spinner("Salvando..."):
         if salvar_config_nuvem(nova_config):
-            st.sidebar.success("Salvo!")
+            st.sidebar.success("Configuração e Carro Salvos!")
             st.rerun()
 
 # --- TELA 1: LANÇAMENTO ---
@@ -332,7 +394,6 @@ else:
 
         resumo = df.groupby('Chave').agg({'Ganhos': 'sum', 'Bonus': 'sum', 'Gastos_Combustivel': 'sum', 'Km_Rodado': 'sum', 'Data': 'nunique'}).rename(columns={'Data': 'Dias'}).reset_index().sort_values('Chave', ascending=False)
         
-        # CÁLCULOS FINAIS
         resumo['Receita_Total'] = resumo['Ganhos'] + resumo['Bonus']
         resumo['IPVA_Seguro_Guardado'] = resumo['Dias'] * custo_fixo_dia
         resumo['Manutencao_Guardada'] = resumo['Km_Rodado'] * val_manut
@@ -352,7 +413,6 @@ else:
             "Lucro_Liquido": st.column_config.NumberColumn("💵 Lucro", format="R$ %.2f")
         })
 
-        # Renomeia para gráfico ficar bonito
         grafico_df = resumo.rename(columns={
             'Ganhos': 'Corridas',
             'Bonus': 'Bônus',
@@ -362,17 +422,14 @@ else:
             'Depreciacao_Guardada': 'Depreciação'
         })
 
-        # AGORA COM TÍTULOS DEFINIDOS (SEM 'UNDEFINED')
         t1, t2, t3 = st.tabs(["Faturamento vs Bônus", "Lucro", "Custos"])
         with t1: 
             fig_fat = px.bar(grafico_df, x='Chave', y=['Corridas', 'Bônus'], title="Composição da Receita", barmode='stack', color_discrete_map={'Corridas': '#00CC96', 'Bônus': '#636EFA'})
             st.plotly_chart(estilo_grafico(fig_fat, "R$"), width="stretch")
         with t2: 
-            # Adicionado title=
             fig_lucro = px.bar(grafico_df, x='Chave', y='Lucro Real', title="Evolução do Lucro Real", color_discrete_sequence=['#28a745'])
             st.plotly_chart(estilo_grafico(fig_lucro, "R$"), width="stretch")
         with t3: 
-            # Adicionado title=
             fig_custos = px.bar(grafico_df, x='Chave', y=['IPVA/Seguro', 'Manutenção', 'Depreciação'], barmode='group', title="Detalhamento dos Custos")
             st.plotly_chart(estilo_grafico(fig_custos, "R$"), width="stretch")
     else:
