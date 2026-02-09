@@ -98,9 +98,8 @@ def carregar_config():
         st.session_state['config_user'] = padrao
     return st.session_state['config_user']
 
-# --- ESTILO GRÁFICO (CORRIGIDO R$) ---
+# --- ESTILO GRÁFICO ---
 def estilo_grafico(fig, titulo_eixo_y):
-    # Adicionado 'R$' de volta no template do texto
     fig.update_traces(texttemplate='R$ %{y:,.2f}', textposition='outside', marker_cornerradius=10)
     fig.update_layout(title_x=0.5, title_font_size=18, yaxis_title=titulo_eixo_y, xaxis_title=None,
         xaxis=dict(type='category', showgrid=False, showline=False),
@@ -181,10 +180,9 @@ if menu_escolha == "📝 Lançamento Diário":
     if hoje_lucro > 0: col2.success(f"💵 LUCRO LÍQUIDO: R$ {hoje_lucro:.2f}")
     else: col2.error(f"💸 PREJUÍZO: R$ {hoje_lucro:.2f}")
 
-    # Gráfico Donut (CORRIGIDO DUPLICIDADE)
+    # Gráfico Donut
     labels = ['Lucro (Inclui Bônus)', 'Guardar', 'Combustível']
     values = [max(0, hoje_lucro), hoje_total_guardar, hoje_comb]
-    # Mudei textposition para 'inside' para forçar ficar apenas dentro e não duplicar
     fig = go.Figure(data=[go.Pie(labels=labels, values=values, hole=.5, textinfo='percent', textposition='inside', marker=dict(colors=['#28a745', '#dc3545', '#ffc107'], line=dict(color='#000000', width=1)))])
     fig.update_layout(height=350, margin=dict(t=30, b=10, l=10, r=10), legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
     st.plotly_chart(fig, width="stretch")
@@ -222,8 +220,16 @@ else:
             df['Chave'] = pd.to_datetime(df['Data']).dt.strftime('%Y')
             titulo = "Anual"
 
-        resumo = df.groupby('Chave').agg({'Ganhos': 'sum', 'Bonus': 'sum', 'Gastos_Combustivel': 'sum', 'Km_Rodado': 'sum', 'Data': 'nunique'}).rename(columns={'Data': 'Dias'}).reset_index().sort_values('Chave', ascending=False)
+        # Agrupamento
+        resumo = df.groupby('Chave').agg({
+            'Ganhos': 'sum', 
+            'Bonus': 'sum', 
+            'Gastos_Combustivel': 'sum', 
+            'Km_Rodado': 'sum', 
+            'Data': 'nunique'
+        }).rename(columns={'Data': 'Dias'}).reset_index().sort_values('Chave', ascending=False)
         
+        # Cálculos
         resumo['Receita_Total'] = resumo['Ganhos'] + resumo['Bonus']
         resumo['IPVA_Seguro_Guardado'] = resumo['Dias'] * custo_fixo_dia
         resumo['Manutencao_Guardada'] = resumo['Km_Rodado'] * val_manut
@@ -231,10 +237,17 @@ else:
         resumo['Lucro_Liquido'] = resumo['Receita_Total'] - resumo['Gastos_Combustivel'] - resumo['IPVA_Seguro_Guardado'] - resumo['Manutencao_Guardada'] - resumo['Depreciacao_Guardada']
 
         st.title(f"Relatório {titulo}")
+        
+        # CONFIGURAÇÃO DE COLUNAS (AQUI ESTÁ A CORREÇÃO DE FORMATAÇÃO)
         st.dataframe(resumo, hide_index=True, width="stretch", column_config={
             "Receita_Total": st.column_config.NumberColumn("💰 Total (Ganhos+Bônus)", format="R$ %.2f"),
             "Ganhos": st.column_config.NumberColumn("🚗 Corridas", format="R$ %.2f"),
             "Bonus": st.column_config.NumberColumn("🎁 Bônus", format="R$ %.2f"),
+            "Gastos_Combustivel": st.column_config.NumberColumn("⛽ Combustível", format="R$ %.2f"),
+            "Km_Rodado": st.column_config.NumberColumn("🛣️ KM Rodado", format="%.1f km"),
+            "IPVA_Seguro_Guardado": st.column_config.NumberColumn("🏦 IPVA/Seguro", format="R$ %.2f"),
+            "Manutencao_Guardada": st.column_config.NumberColumn("🛠️ Manutenção", format="R$ %.2f"),
+            "Depreciacao_Guardada": st.column_config.NumberColumn("📉 Depreciação", format="R$ %.2f"),
             "Lucro_Liquido": st.column_config.NumberColumn("💵 Lucro Líquido", format="R$ %.2f")
         })
 
