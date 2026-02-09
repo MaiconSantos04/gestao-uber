@@ -12,7 +12,7 @@ import urllib3
 st.set_page_config(page_title="Gestão Uber Pro", layout="wide")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- LISTA FIXA DE MARCAS (PARA GARANTIR QUE O MENU APAREÇA) ---
+# --- LISTA FIXA DE MARCAS (OFFLINE) ---
 MARCAS_FIXAS = {
     "Chevrolet": 23, "Fiat": 21, "Volkswagen": 59, "Ford": 22, 
     "Hyundai": 25, "Toyota": 56, "Honda": 20, "Renault": 44, 
@@ -73,7 +73,7 @@ def carregar_config_nuvem():
             "valor_carro": 83000.0, "custo_fixo_anual": 6300.0, "dias_trabalho_mes": 4.0,
             "custo_manut_km": 0.25, "custo_deprec_km": 0.40, "media_km_dia": 150.0,
             "consumo_carro": 10.0, "preco_gasolina": 5.80,
-            "fipe_marca_id": "", "fipe_modelo_id": "", "fipe_ano_id": "", "fipe_nome_carro": ""
+            "fipe_marca_id": "", "fipe_modelo_id": "", "fipe_ano_id": "", "fipe_nome_carro": "Carro Padrão"
         }
         
         config_final = {**padrao, **config_dict}
@@ -85,7 +85,7 @@ def carregar_config_nuvem():
             "valor_carro": 83000.0, "custo_fixo_anual": 6300.0, "dias_trabalho_mes": 4.0,
             "custo_manut_km": 0.25, "custo_deprec_km": 0.40, "media_km_dia": 150.0,
             "consumo_carro": 10.0, "preco_gasolina": 5.80,
-            "fipe_marca_id": "", "fipe_modelo_id": "", "fipe_ano_id": "", "fipe_nome_carro": ""
+            "fipe_marca_id": "", "fipe_modelo_id": "", "fipe_ano_id": "", "fipe_nome_carro": "Carro Padrão"
         }
 
 def salvar_config_nuvem(nova_config):
@@ -103,7 +103,7 @@ def salvar_config_nuvem(nova_config):
         st.error(f"Erro ao salvar config: {e}")
         return False
 
-# --- FUNÇÕES DE LIMPEZA ---
+# --- FUNÇÕES ÚTEIS ---
 def limpar_id_fipe(valor):
     if not valor: return None
     valor_str = str(valor).strip()
@@ -170,8 +170,7 @@ def desfazer_ultimo_lancamento():
 headers = {'User-Agent': 'Mozilla/5.0'}
 def get_json(url):
     try:
-        # Timeout aumentado e verify=False para evitar erros de conexão
-        response = requests.get(url, headers=headers, timeout=10, verify=False)
+        response = requests.get(url, headers=headers, timeout=5, verify=False)
         if response.status_code == 200: return response.json()
     except: pass
     return None
@@ -196,18 +195,19 @@ menu_escolha = st.sidebar.radio("Ir para:", ["📝 Lançamento Diário", "📋 E
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Custos & Calculadora")
 
-# --- FIPE COM LISTA FIXA (GARANTIDA) ---
+# --- FIPE: MODO HÍBRIDO (AUTO/MANUAL) ---
 with st.sidebar.expander("🚘 Meu Carro (FIPE)", expanded=True):
-    # Carrega dados salvos
+    # Tenta mostrar o carro salvo
+    carro_nome = config.get('fipe_nome_carro', 'Não definido')
     m_id = limpar_id_fipe(config.get('fipe_marca_id'))
-    mod_id = limpar_id_fipe(config.get('fipe_modelo_id'))
-    a_id = limpar_id_fipe(config.get('fipe_ano_id'))
     
-    if m_id and mod_id and a_id:
-        st.success(f"Salvo: **{config.get('fipe_nome_carro', 'Seu Carro')}**")
-        if st.button("🔄 Atualizar Preço FIPE"):
-            with st.spinner("Buscando..."):
-                url = f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{m_id}/modelos/{mod_id}/anos/{a_id}"
+    st.info(f"Carro Atual: **{carro_nome}**")
+    
+    # Se tiver IDs salvos, tenta atualizar o valor
+    if m_id and config.get('fipe_modelo_id'):
+        if st.button("🔄 Atualizar Valor (Automático)"):
+            with st.spinner("Conectando na FIPE..."):
+                url = f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{m_id}/modelos/{config['fipe_modelo_id']}/anos/{config['fipe_ano_id']}"
                 dados = get_json(url)
                 if dados:
                     v_str = dados['Valor']
@@ -217,62 +217,67 @@ with st.sidebar.expander("🚘 Meu Carro (FIPE)", expanded=True):
                     salvar_config_nuvem(st.session_state['config_user'])
                     st.success(f"Atualizado: {v_str}")
                     st.rerun()
-                else: st.error("Erro FIPE. Tente mais tarde.")
+                else:
+                    st.error("Falha na conexão FIPE.")
 
     st.markdown("---")
-    st.markdown("**Definir/Trocar Carro:**")
+    st.markdown("**Definir ou Trocar Carro:**")
     
-    # 1. SELEÇÃO DE MARCA (USA LISTA FIXA DO CÓDIGO - SEM INTERNET)
+    # 1. MARCA (Lista Fixa - Sempre funciona)
     lista_marcas = sorted(list(MARCAS_FIXAS.keys()))
-    marca_selecionada = st.selectbox("1. Selecione a Marca", lista_marcas, index=0)
+    marca_selecionada = st.selectbox("Marca", lista_marcas, index=0)
     
     if marca_selecionada:
         cod_marca = MARCAS_FIXAS[marca_selecionada]
         
-        # 2. SELEÇÃO DE MODELO (Só aqui usa internet)
+        # 2. MODELO (Tenta buscar na API)
         modelos_data = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos")
         
         if modelos_data:
+            # --- CAMINHO FELIZ (API FUNCIONANDO) ---
             modelos_dict = {m['nome']: m['codigo'] for m in modelos_data['modelos']}
-            modelo_sel = st.selectbox("2. Selecione o Modelo", list(modelos_dict.keys()))
+            modelo_sel = st.selectbox("Modelo", list(modelos_dict.keys()))
             
             if modelo_sel:
                 cod_modelo = modelos_dict[modelo_sel]
-                
-                # 3. SELEÇÃO DE ANO
                 anos_data = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos/{cod_modelo}/anos")
                 
                 if anos_data:
                     anos_dict = {a['nome']: a['codigo'] for a in anos_data}
-                    ano_sel = st.selectbox("3. Selecione o Ano", list(anos_dict.keys()))
+                    ano_sel = st.selectbox("Ano", list(anos_dict.keys()))
                     
-                    if st.button("💾 Salvar Carro Como Padrão"):
+                    if st.button("💾 Salvar Automático"):
                         cod_ano = anos_dict[ano_sel]
                         dados_finais = get_json(f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{cod_marca}/modelos/{cod_modelo}/anos/{cod_ano}")
-                        
                         if dados_finais:
                             v_str = dados_finais['Valor']
                             v_limpo = float(v_str.replace("R$ ", "").replace(".", "").replace(",", "."))
-                            
                             st.session_state['config_user'].update({
-                                'valor_carro': v_limpo,
-                                'fipe_marca_id': cod_marca,
-                                'fipe_modelo_id': cod_modelo,
-                                'fipe_ano_id': cod_ano,
+                                'valor_carro': v_limpo, 'fipe_marca_id': cod_marca,
+                                'fipe_modelo_id': cod_modelo, 'fipe_ano_id': cod_ano,
                                 'fipe_nome_carro': f"{marca_selecionada} {modelo_sel} {ano_sel}"
                             })
                             salvar_config_nuvem(st.session_state['config_user'])
-                            st.success(f"Salvo! Valor: {v_str}")
-                            st.rerun()
-                        else: st.error("Erro ao buscar valor final.")
+                            st.success(f"Salvo! Valor: {v_str}"); st.rerun()
                 else: st.info("Carregando anos...")
         else:
-            st.warning(f"Aguardando conexão para buscar modelos da {marca_selecionada}...")
+            # --- CAMINHO DE SEGURANÇA (API FALHOU) ---
+            st.warning("⚠️ API FIPE instável. Digite o nome manualmente abaixo e salve.")
+            nome_manual = st.text_input("Nome do Carro (Ex: Onix 2023)")
+            if st.button("💾 Salvar Nome Manual"):
+                st.session_state['config_user'].update({
+                    'fipe_nome_carro': f"{marca_selecionada} {nome_manual}",
+                    'fipe_marca_id': "", 'fipe_modelo_id': "", 'fipe_ano_id': "" # Limpa IDs pois é manual
+                })
+                salvar_config_nuvem(st.session_state['config_user'])
+                st.success("Nome salvo! Agora digite o valor no campo abaixo.")
+                st.rerun()
 
-# --- INPUTS ---
-val_carro = st.sidebar.number_input("Valor Veículo (R$)", value=float(config.get('valor_carro', 83000)), format="%.2f")
-val_fixo = st.sidebar.number_input("IPVA+Seguro Anual (R$)", value=float(config.get('custo_fixo_anual', 6300)), format="%.2f")
-dias_mes = st.sidebar.number_input("Dias trab/mês", min_value=1, max_value=31, value=int(float(config.get('dias_trabalho_mes', 4))))
+# --- INPUTS FINANCEIROS (SEMPRE EDITÁVEIS) ---
+st.markdown("### Valores")
+val_carro = st.number_input("Valor Veículo (R$)", value=float(config.get('valor_carro', 83000)), format="%.2f", help="Se a FIPE falhar, edite este valor manualmente.")
+val_fixo = st.number_input("IPVA+Seguro Anual (R$)", value=float(config.get('custo_fixo_anual', 6300)), format="%.2f")
+dias_mes = st.number_input("Dias trab/mês", min_value=1, max_value=31, value=int(float(config.get('dias_trabalho_mes', 4))))
 
 with st.sidebar.expander("⛽ Combustível e Rodagem", expanded=True):
     media_km_dia = st.number_input("Média KM/dia", value=float(config.get('media_km_dia', 150)))
