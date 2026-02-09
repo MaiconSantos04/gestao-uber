@@ -92,16 +92,23 @@ def salvar_config_nuvem(nova_config):
         st.error(f"Erro ao salvar config: {e}")
         return False
 
-# --- FUNÇÃO DE LIMPEZA FIPE (CRÍTICA) ---
+# --- NOVA FUNÇÃO DE LIMPEZA FIPE (BLINDADA) ---
 def limpar_id_fipe(valor):
-    if not valor: return ""
+    if not valor: return None
     valor_str = str(valor).strip()
-    # Tenta converter pra float e depois int (ex: "59.0" -> 59.0 -> 59 -> "59")
+    
+    # Se for vazio ou zero
+    if valor_str == "" or valor_str == "0": return None
+    
+    # Se tiver traço (ex: 2023-1), é ano, mantém como string
+    if "-" in valor_str:
+        return valor_str
+        
+    # Se for número (ex: 59.0 ou 59), converte pra inteiro e depois string
     try:
         return str(int(float(valor_str)))
     except:
-        # Se não der (ex: "2023-1"), retorna a string limpa
-        return valor_str
+        return valor_str # Retorna como está se falhar
 
 # --- LIMPEZA DE DADOS FINANCEIROS ---
 def limpar_valor_hibrido(valor):
@@ -206,35 +213,38 @@ menu_escolha = st.sidebar.radio("Ir para:", ["📝 Lançamento Diário", "📋 E
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Custos & Calculadora")
 
-# --- FIPE COM LIMPEZA PROFUNDA ---
+# --- FIPE ---
 with st.sidebar.expander("🚘 Meu Carro (FIPE)", expanded=True):
-    # Verifica se existem dados salvos
-    tem_carro = config.get('fipe_marca_id') and config.get('fipe_modelo_id')
+    # Verifica se os IDs existem e são válidos
+    m_id = limpar_id_fipe(config.get('fipe_marca_id'))
+    mod_id = limpar_id_fipe(config.get('fipe_modelo_id'))
+    a_id = limpar_id_fipe(config.get('fipe_ano_id'))
+    
+    tem_carro = m_id and mod_id and a_id
     
     if tem_carro:
         st.success(f"Carro Salvo: **{config.get('fipe_nome_carro', 'Seu Carro')}**")
         
         if st.button("🔄 Atualizar Preço FIPE Agora"):
             with st.spinner("Conectando na FIPE..."):
-                # LIMPEZA PROFUNDA DOS CÓDIGOS
-                m_id = limpar_id_fipe(config['fipe_marca_id'])
-                mod_id = limpar_id_fipe(config['fipe_modelo_id'])
-                a_id = limpar_id_fipe(config['fipe_ano_id'])
-                
                 url = f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{m_id}/modelos/{mod_id}/anos/{a_id}"
+                # st.write(url) # Debug se precisar
                 dados_fipe = get_json(url)
                 
                 if dados_fipe:
                     valor_str = dados_fipe['Valor']
                     novo_valor = float(valor_str.replace("R$ ", "").replace(".", "").replace(",", "."))
+                    
+                    # Atualiza e Salva
                     config['valor_carro'] = novo_valor
                     st.session_state['config_user']['valor_carro'] = novo_valor
                     salvar_config_nuvem(st.session_state['config_user'])
+                    
                     st.success(f"Atualizado: {valor_str}")
                     st.rerun()
                 else:
-                    st.error("Erro na FIPE. Os códigos salvos podem estar inválidos.")
-                    st.warning("⚠️ Solução: Selecione seu carro novamente na lista abaixo e clique em 'Salvar Carro como Padrão'.")
+                    st.error("Erro na FIPE.")
+                    st.warning("⚠️ Os dados salvos parecem incorretos. Por favor, selecione e salve seu carro novamente abaixo.")
     else:
         st.info("Selecione seu carro abaixo para salvar.")
 
@@ -266,11 +276,14 @@ with st.sidebar.expander("🚘 Meu Carro (FIPE)", expanded=True):
                             if valor_final:
                                 valor_str = valor_final['Valor']
                                 valor_limpo = float(valor_str.replace("R$ ", "").replace(".", "").replace(",", "."))
+                                
+                                # Atualiza Session State
                                 st.session_state['config_user']['valor_carro'] = valor_limpo
                                 st.session_state['config_user']['fipe_marca_id'] = cod_marca
                                 st.session_state['config_user']['fipe_modelo_id'] = cod_modelo
                                 st.session_state['config_user']['fipe_ano_id'] = cod_ano
                                 st.session_state['config_user']['fipe_nome_carro'] = f"{marca_nome} {modelo_nome} {ano_nome}"
+                                
                                 st.success(f"Carro salvo! Valor: {valor_str}. Salve abaixo.")
 
 # --- INPUTS (COM MÉTODO 2) ---
