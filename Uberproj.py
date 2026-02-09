@@ -6,6 +6,10 @@ import plotly.express as px
 from datetime import date
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+import urllib3
+
+# Desativa avisos de SSL inseguro (Necessário para API da FIPE em alguns servidores)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Gestão Uber Pro", layout="wide")
@@ -92,23 +96,14 @@ def salvar_config_nuvem(nova_config):
         st.error(f"Erro ao salvar config: {e}")
         return False
 
-# --- NOVA FUNÇÃO DE LIMPEZA FIPE (BLINDADA) ---
+# --- FUNÇÃO DE LIMPEZA FIPE ---
 def limpar_id_fipe(valor):
     if not valor: return None
     valor_str = str(valor).strip()
-    
-    # Se for vazio ou zero
     if valor_str == "" or valor_str == "0": return None
-    
-    # Se tiver traço (ex: 2023-1), é ano, mantém como string
-    if "-" in valor_str:
-        return valor_str
-        
-    # Se for número (ex: 59.0 ou 59), converte pra inteiro e depois string
-    try:
-        return str(int(float(valor_str)))
-    except:
-        return valor_str # Retorna como está se falhar
+    if "-" in valor_str: return valor_str
+    try: return str(int(float(valor_str)))
+    except: return valor_str
 
 # --- LIMPEZA DE DADOS FINANCEIROS ---
 def limpar_valor_hibrido(valor):
@@ -179,11 +174,13 @@ def desfazer_ultimo_lancamento():
         return False
     except: return False
 
-# --- API FIPE ---
+# --- API FIPE (FORÇA BRUTA) ---
 headers = {'User-Agent': 'Mozilla/5.0'}
 def get_json(url):
     try:
-        response = requests.get(url, headers=headers, timeout=5)
+        # verify=False pula verificação de SSL (resolve erros de conexão em nuvem)
+        # timeout=10 espera mais tempo pela resposta
+        response = requests.get(url, headers=headers, timeout=10, verify=False)
         if response.status_code == 200: return response.json()
     except: pass
     return None
@@ -213,44 +210,37 @@ menu_escolha = st.sidebar.radio("Ir para:", ["📝 Lançamento Diário", "📋 E
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Custos & Calculadora")
 
-# --- FIPE ---
+# --- FIPE COM SISTEMA DE RESGATE ---
 with st.sidebar.expander("🚘 Meu Carro (FIPE)", expanded=True):
-    # Verifica se os IDs existem e são válidos
     m_id = limpar_id_fipe(config.get('fipe_marca_id'))
     mod_id = limpar_id_fipe(config.get('fipe_modelo_id'))
     a_id = limpar_id_fipe(config.get('fipe_ano_id'))
     
-    tem_carro = m_id and mod_id and a_id
-    
-    if tem_carro:
+    if m_id and mod_id and a_id:
         st.success(f"Carro Salvo: **{config.get('fipe_nome_carro', 'Seu Carro')}**")
-        
         if st.button("🔄 Atualizar Preço FIPE Agora"):
             with st.spinner("Conectando na FIPE..."):
                 url = f"https://parallelum.com.br/fipe/api/v1/carros/marcas/{m_id}/modelos/{mod_id}/anos/{a_id}"
-                # st.write(url) # Debug se precisar
                 dados_fipe = get_json(url)
-                
                 if dados_fipe:
                     valor_str = dados_fipe['Valor']
                     novo_valor = float(valor_str.replace("R$ ", "").replace(".", "").replace(",", "."))
-                    
-                    # Atualiza e Salva
                     config['valor_carro'] = novo_valor
                     st.session_state['config_user']['valor_carro'] = novo_valor
                     salvar_config_nuvem(st.session_state['config_user'])
-                    
                     st.success(f"Atualizado: {valor_str}")
                     st.rerun()
                 else:
-                    st.error("Erro na FIPE.")
-                    st.warning("⚠️ Os dados salvos parecem incorretos. Por favor, selecione e salve seu carro novamente abaixo.")
+                    st.error("Erro na FIPE. Se persistir, recadastre o carro.")
     else:
-        st.info("Selecione seu carro abaixo para salvar.")
+        st.info("Cadastre seu carro para atualizar o valor automaticamente.")
 
     st.markdown("---")
     st.markdown("**Definir/Trocar Carro:**")
+    
+    # Tenta carregar marcas
     marcas_data = get_json("https://parallelum.com.br/fipe/api/v1/carros/marcas")
+    
     if marcas_data:
         marcas_dict = {m['nome']: m['codigo'] for m in marcas_data}
         idx_marca = list(marcas_dict.keys()).index("Chevrolet") if "Chevrolet" in marcas_dict else 0
@@ -276,21 +266,20 @@ with st.sidebar.expander("🚘 Meu Carro (FIPE)", expanded=True):
                             if valor_final:
                                 valor_str = valor_final['Valor']
                                 valor_limpo = float(valor_str.replace("R$ ", "").replace(".", "").replace(",", "."))
-                                
-                                # Atualiza Session State
                                 st.session_state['config_user']['valor_carro'] = valor_limpo
                                 st.session_state['config_user']['fipe_marca_id'] = cod_marca
                                 st.session_state['config_user']['fipe_modelo_id'] = cod_modelo
                                 st.session_state['config_user']['fipe_ano_id'] = cod_ano
                                 st.session_state['config_user']['fipe_nome_carro'] = f"{marca_nome} {modelo_nome} {ano_nome}"
-                                
                                 st.success(f"Carro salvo! Valor: {valor_str}. Salve abaixo.")
+    else:
+        st.error("⚠️ Falha ao carregar lista de marcas.")
+        if st.button("🔄 Tentar Conexão Novamente"):
+            st.rerun()
 
 # --- INPUTS (COM MÉTODO 2) ---
 val_carro = st.sidebar.number_input("Valor Veículo (R$)", value=float(config.get('valor_carro', 83000)), format="%.2f")
 val_fixo = st.sidebar.number_input("IPVA+Seguro Anual (R$)", value=float(config.get('custo_fixo_anual', 6300)), format="%.2f")
-
-# MÉTODO 2: INPUT DE DIAS POR MÊS
 dias_mes = st.sidebar.number_input("Dias trabalhados por MÊS", min_value=1, max_value=31, value=int(float(config.get('dias_trabalho_mes', 4))), help="Ex: Se roda fim de semana sim/não, coloque 4 dias.")
 
 with st.sidebar.expander("⛽ Combustível e Rodagem", expanded=True):
@@ -302,10 +291,9 @@ with st.sidebar.expander("🛠️ Manutenção/Depreciação", expanded=False):
     val_manut = st.number_input("Manut/KM (R$)", value=float(config.get('custo_manut_km', 0.25)), format="%.2f", step=0.05)
     val_deprec = st.number_input("Deprec/KM (R$)", value=float(config.get('custo_deprec_km', 0.40)), format="%.2f", step=0.05)
 
-# --- CÁLCULO MÉTODO 2 (CAIXA) ---
+# --- CÁLCULOS ---
 custo_fixo_mensal = val_fixo / 12
 custo_fixo_dia = custo_fixo_mensal / dias_mes if dias_mes > 0 else 0
-
 custo_fixo_km = custo_fixo_dia / media_km_dia if media_km_dia > 0 else 0
 custo_gas_km = preco_gasolina / consumo_carro if consumo_carro > 0 else 0
 custo_km_total = custo_fixo_km + custo_gas_km + val_manut + val_deprec
@@ -318,8 +306,7 @@ st.sidebar.caption(f"Meta IPVA/Seguro Diária: **R$ {custo_fixo_dia:.2f}** (Base
 if st.sidebar.button("💾 Salvar Parâmetros (Nuvem)"):
     config_atual = st.session_state['config_user']
     nova_config = {
-        "valor_carro": val_carro, "custo_fixo_anual": val_fixo, 
-        "dias_trabalho_mes": dias_mes, 
+        "valor_carro": val_carro, "custo_fixo_anual": val_fixo, "dias_trabalho_mes": dias_mes,
         "custo_manut_km": val_manut, "custo_deprec_km": val_deprec,
         "media_km_dia": media_km_dia, "consumo_carro": consumo_carro, "preco_gasolina": preco_gasolina,
         "fipe_marca_id": config_atual.get("fipe_marca_id", ""),
@@ -345,10 +332,7 @@ if menu_escolha == "📝 Lançamento Diário":
 
     hoje_manutencao = hoje_km * val_manut
     hoje_depreciacao = hoje_km * val_deprec
-    
-    # MÉTODO 2: IPVA é fixo por dia trabalhado (Calculado acima)
     hoje_ipva = custo_fixo_dia 
-    
     hoje_total_guardar = hoje_manutencao + hoje_depreciacao + hoje_ipva
     hoje_lucro = (hoje_ganho + hoje_bonus) - hoje_total_guardar - hoje_comb
 
@@ -427,13 +411,8 @@ else:
             titulo = "Anual"
 
         resumo = df.groupby('Chave').agg({'Ganhos': 'sum', 'Bonus': 'sum', 'Gastos_Combustivel': 'sum', 'Km_Rodado': 'sum', 'Data': 'nunique'}).rename(columns={'Data': 'Dias'}).reset_index().sort_values('Chave', ascending=False)
-        
-        # CÁLCULOS FINAIS RELATÓRIO
         resumo['Receita_Total'] = resumo['Ganhos'] + resumo['Bonus']
-        
-        # MÉTODO 2: IPVA = Dias trabalhados * Custo Dia (Calculado na config)
         resumo['IPVA_Seguro_Guardado'] = resumo['Dias'] * custo_fixo_dia
-        
         resumo['Manutencao_Guardada'] = resumo['Km_Rodado'] * val_manut
         resumo['Depreciacao_Guardada'] = resumo['Km_Rodado'] * val_deprec
         resumo['Lucro_Liquido'] = resumo['Receita_Total'] - resumo['Gastos_Combustivel'] - resumo['IPVA_Seguro_Guardado'] - resumo['Manutencao_Guardada'] - resumo['Depreciacao_Guardada']
@@ -451,24 +430,10 @@ else:
             "Lucro_Liquido": st.column_config.NumberColumn("💵 Lucro", format="R$ %.2f")
         })
 
-        grafico_df = resumo.rename(columns={
-            'Ganhos': 'Corridas',
-            'Bonus': 'Bônus',
-            'Lucro_Liquido': 'Lucro Real',
-            'IPVA_Seguro_Guardado': 'IPVA/Seguro',
-            'Manutencao_Guardada': 'Manutenção',
-            'Depreciacao_Guardada': 'Depreciação'
-        })
-
+        grafico_df = resumo.rename(columns={'Ganhos': 'Corridas', 'Bonus': 'Bônus', 'Lucro_Liquido': 'Lucro Real', 'IPVA_Seguro_Guardado': 'IPVA/Seguro', 'Manutencao_Guardada': 'Manutenção', 'Depreciacao_Guardada': 'Depreciação'})
         t1, t2, t3 = st.tabs(["Faturamento vs Bônus", "Lucro", "Custos"])
-        with t1: 
-            fig_fat = px.bar(grafico_df, x='Chave', y=['Corridas', 'Bônus'], title="Composição da Receita", barmode='stack', color_discrete_map={'Corridas': '#00CC96', 'Bônus': '#636EFA'})
-            st.plotly_chart(estilo_grafico(fig_fat, "R$"), width="stretch")
-        with t2: 
-            fig_lucro = px.bar(grafico_df, x='Chave', y='Lucro Real', title="Evolução do Lucro Real", color_discrete_sequence=['#28a745'])
-            st.plotly_chart(estilo_grafico(fig_lucro, "R$"), width="stretch")
-        with t3: 
-            fig_custos = px.bar(grafico_df, x='Chave', y=['IPVA/Seguro', 'Manutenção', 'Depreciação'], barmode='group', title="Detalhamento dos Custos")
-            st.plotly_chart(estilo_grafico(fig_custos, "R$"), width="stretch")
+        with t1: st.plotly_chart(estilo_grafico(px.bar(grafico_df, x='Chave', y=['Corridas', 'Bônus'], title="Composição da Receita", barmode='stack', color_discrete_map={'Corridas': '#00CC96', 'Bônus': '#636EFA'}), "R$"), width="stretch")
+        with t2: st.plotly_chart(estilo_grafico(px.bar(grafico_df, x='Chave', y='Lucro Real', title="Evolução do Lucro Real", color_discrete_sequence=['#28a745']), "R$"), width="stretch")
+        with t3: st.plotly_chart(estilo_grafico(px.bar(grafico_df, x='Chave', y=['IPVA/Seguro', 'Manutenção', 'Depreciação'], barmode='group', title="Detalhamento dos Custos"), "R$"), width="stretch")
     else:
         st.info("Nenhum dado na planilha.")
